@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: seva_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-seva_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seva_password}
+      POSTGRES_DB: ${POSTGRES_DB:-seva_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-seva_user} -d ${POSTGRES_DB:-seva_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: seva_backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seva_user}:${POSTGRES_PASSWORD:-seva_password}@postgres:5432/${POSTGRES_DB:-seva_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-seva_user}:${POSTGRES_PASSWORD:-seva_password}@postgres:5432/${POSTGRES_DB:-seva_db}
+      SECRET_KEY: ${SECRET_KEY:-super-secret-key-change-in-production-seva-ai}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000", "http://127.0.0.1:3000"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: seva_frontend
+    restart: always
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
