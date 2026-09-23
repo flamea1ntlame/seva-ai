@@ -2,11 +2,12 @@ import os
 import json
 import logging
 from typing import Dict, Any, List, Optional
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-
-
-from app.agent.prompts import SYSTEM_PROMPT
+from app.models import Application
 from app.agent.tools import (
     TOOLS_SCHEMA,
     tool_list_services,
@@ -35,13 +36,39 @@ async def run_agent_workflow(
     api_key = settings.GEMINI_API_KEY
     model_name = settings.GEMINI_MODEL
 
+    # Fetch existing application context
+    active_apps_result = await db.execute(
+        select(Application).options(selectinload(Application.service)).where(
+            Application.user_id == uuid.UUID(citizen_id),
+            Application.status.in_([
+                "DISCOVER", "COLLECTING_DOCUMENTS", "EXTRACTING",
+                "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
+                "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
+            ])
+        )
+    )
+    active_apps = active_apps_result.scalars().all()
+
+    app_context_str = ""
+    if active_apps:
+        app_context_str = "\n\nCURRENT APPLICATION CONTEXT:\nThe user has the following active/existing applications:\n"
+        for app in active_apps:
+            app_context_str += (
+                f"- Application ID: {app.id}\n"
+                f"  Service: {app.service.title} ({app.service.code})\n"
+                f"  Status: {app.status}\n"
+            )
+            if app.government_reference:
+                app_context_str += f"  Gov Reference: {app.government_reference}\n"
+        app_context_str += "\nUse this context to resolve references to 'my application'."
+
     if api_key:
         try:
-            return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name)
+            return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name, app_context_str)
         except Exception as e:
             logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
 
-    return await _run_fallback_tool_workflow(message, citizen_id, db)
+    return await _run_fallback_tool_workflow(message, citizen_id, db, active_apps)
 
 
 async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: AsyncSession) -> Dict[str, Any]:
@@ -99,7 +126,8 @@ async def _run_gemini_tool_workflow(
     citizen_id: str,
     db: AsyncSession,
     api_key: str,
-    model_name: str
+    model_name: str,
+    app_context_str: str = ""
 ) -> Dict[str, Any]:
     from google import genai
     from google.genai import types
@@ -145,7 +173,7 @@ async def _run_gemini_tool_workflow(
     gemini_tool = types.Tool(function_declarations=declarations)
 
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=SYSTEM_PROMPT + app_context_str,
         tools=[gemini_tool],
         temperature=0.2
     )
@@ -240,7 +268,8 @@ async def _run_gemini_tool_workflow(
 async def _run_fallback_tool_workflow(
     message: str,
     citizen_id: str,
-    db: AsyncSession
+    db: AsyncSession,
+    active_apps: List[Application] = []
 ) -> Dict[str, Any]:
     msg_lower = message.strip().lower()
 
@@ -252,6 +281,52 @@ async def _run_fallback_tool_workflow(
         target_service_code = "income_certificate"
     elif "birth" in msg_lower:
         target_service_code = "birth_certificate"
+
+    # Filter active apps if user specified a service
+    if target_service_code:
+        matching_apps = [a for a in active_apps if a.service.code == target_service_code]
+        # Only restrict if it narrows it down
+        if matching_apps:
+            active_apps = matching_apps
+
+    # Minimal fallback logic for existing applications
+    if len(active_apps) > 1 and ("prepare" in msg_lower or "submit" in msg_lower or "ready" in msg_lower or "application" in msg_lower):
+        titles = ", ".join([f"{a.service.title} ({a.application_number})" for a in active_apps])
+        return {
+            "reply": f"You have multiple active applications: {titles}. Could you please specify which application you are referring to?",
+            "application_id": None,
+            "service_code": None,
+            "status": None,
+            "required_documents": [],
+            "required_fields": [],
+        }
+
+    if len(active_apps) == 1 and ("prepare" in msg_lower or "submit" in msg_lower or "ready" in msg_lower or "application" in msg_lower):
+        app = active_apps[0]
+        if app.status == "READY_FOR_REVIEW":
+            consent_res = await _execute_tool("request_consent", {
+                "application_id": str(app.id),
+                "data_requested": [],
+                "requesting_department": app.service.department,
+                "purpose": "Application Processing"
+            }, citizen_id, db)
+            return {
+                "reply": f"I have prepared your application for submission. Please review and approve the consent request.",
+                "application_id": str(app.id),
+                "service_code": app.service.code,
+                "status": "CONSENT_REQUIRED",
+                "required_documents": [],
+                "required_fields": [],
+            }
+        elif app.status == "CONSENT_REQUIRED":
+            return {
+                "reply": f"Your application {app.application_number} is waiting for your consent approval. Please approve it.",
+                "application_id": str(app.id),
+                "service_code": app.service.code,
+                "status": app.status,
+                "required_documents": [],
+                "required_fields": [],
+            }
 
     # Step 2: Ambiguous intent -> call list_services() tool
     if not target_service_code:
@@ -296,17 +371,24 @@ async def _run_fallback_tool_workflow(
     missing_docs = [doc for doc in all_docs if doc not in uploaded_docs]
     missing_fields = [field for field in all_fields if field not in merged_profile]
 
-    # Step 5: Create application if not created yet
-    app_result = await _execute_tool("create_application", {"service_code": target_service_code, "citizen_id": citizen_id}, citizen_id, db)
-    if "error" in app_result:
-        return {
-            "reply": f"Application creation failed: {app_result['error']}",
-            "application_id": None,
-            "service_code": target_service_code,
-            "status": None,
-            "required_documents": missing_docs,
-            "required_fields": missing_fields,
+    # Step 5: Create application if not created yet, otherwise reuse
+    if len(active_apps) > 0:
+        app_result = {
+            "application_id": str(active_apps[0].id),
+            "application_number": active_apps[0].application_number,
+            "current_status": active_apps[0].status,
         }
+    else:
+        app_result = await _execute_tool("create_application", {"service_code": target_service_code, "citizen_id": citizen_id}, citizen_id, db)
+        if "error" in app_result:
+            return {
+                "reply": f"Application creation failed: {app_result['error']}",
+                "application_id": None,
+                "service_code": target_service_code,
+                "status": None,
+                "required_documents": missing_docs,
+                "required_fields": missing_fields,
+            }
 
     # Format helpful output reflecting verified vs missing requirements
     docs_formatted = "\n".join([f"  • {doc.replace('_', ' ').title()}" for doc in missing_docs]) if missing_docs else "  • All required documents uploaded and verified! ✅"

@@ -170,3 +170,225 @@ async def test_chat_forbidden_for_other_citizen(client: AsyncClient, db_session:
     res = await client.post("/api/chat", json=payload, headers=headers)
     assert res.status_code == 403
     assert "Forbidden" in res.json()["detail"]
+
+from app.models import Application
+
+@pytest.mark.asyncio
+async def test_chat_existing_ready_for_review(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login
+    login_res = await client.post("/api/auth/login", json={"email": "citizen@example.com", "password": "password123"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me_res = await client.get("/api/auth/me", headers=headers)
+    user_id = me_res.json()["id"]
+
+    # Get service
+    res_s = await db_session.execute(select(Service).where(Service.code == "income_certificate"))
+    service = res_s.scalar_one()
+
+    # Create READY_FOR_REVIEW application
+    app_num = "SEVA-999111"
+    application = Application(
+        application_number=app_num,
+        user_id=uuid.UUID(user_id),
+        service_id=service.id,
+        status="READY_FOR_REVIEW",
+        form_data={},
+        remarks="Test app"
+    )
+    db_session.add(application)
+    await db_session.commit()
+    await db_session.refresh(application)
+
+    # Test generic submit request
+    payload = {
+        "citizen_id": user_id,
+        "message": "I have uploaded everything. Please prepare my application for submission."
+    }
+    res = await client.post("/api/chat", json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should resolve to the existing application and progress to CONSENT_REQUIRED
+    assert data["application_id"] == str(application.id)
+    assert "consent" in data["reply"].lower() or "prepare" in data["reply"].lower() or data["status"] in ["CONSENT_REQUIRED", "READY_FOR_REVIEW"]
+
+    # Cleanup for next test
+    await db_session.delete(application)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_multiple_active_applications(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login
+    login_res = await client.post("/api/auth/login", json={"email": "citizen@example.com", "password": "password123"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me_res = await client.get("/api/auth/me", headers=headers)
+    user_id = me_res.json()["id"]
+
+    # Get services
+    res_s1 = await db_session.execute(select(Service).where(Service.code == "income_certificate"))
+    res_s2 = await db_session.execute(select(Service).where(Service.code == "birth_certificate"))
+    service1 = res_s1.scalar_one()
+    service2 = res_s2.scalar_one()
+
+    # Create two active applications
+    app1 = Application(application_number="SEVA-999222", user_id=uuid.UUID(user_id), service_id=service1.id, status="READY_FOR_REVIEW")
+    app2 = Application(application_number="SEVA-999333", user_id=uuid.UUID(user_id), service_id=service2.id, status="READY_FOR_REVIEW")
+    db_session.add_all([app1, app2])
+    await db_session.commit()
+
+    # Test ambiguous request
+    payload = {
+        "citizen_id": user_id,
+        "message": "Please prepare my application."
+    }
+    res = await client.post("/api/chat", json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should ask for clarification
+    assert "Which" in data["reply"] or "specify" in data["reply"] or "multiple" in data["reply"] or "Could you please specify" in data["reply"]
+
+    # Cleanup
+    await db_session.delete(app1)
+    await db_session.delete(app2)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_existing_consent_required(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    # Wait, the response might not have id in the root, it has id in me_res
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Get service
+    res_s = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service = res_s.scalar_one()
+
+    # Create CONSENT_REQUIRED application
+    app_num = 'SEVA-999444'
+    application = Application(
+        application_number=app_num,
+        user_id=uuid.UUID(user_id),
+        service_id=service.id,
+        status='CONSENT_REQUIRED',
+        form_data={},
+        remarks='Test app'
+    )
+    db_session.add(application)
+    await db_session.commit()
+
+    # Test generic submit request
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Please prepare my application.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should resolve to the existing application and preserve status
+    assert data['application_id'] == str(application.id)
+    assert 'consent' in data['reply'].lower() or 'approve' in data['reply'].lower()
+
+    # Cleanup
+    await db_session.delete(application)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_multiple_active_apps_explicit_intent(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Get services
+    res_s1 = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    res_s2 = await db_session.execute(select(Service).where(Service.code == 'birth_certificate'))
+    service1 = res_s1.scalar_one()
+    service2 = res_s2.scalar_one()
+
+    # Create two active applications
+    app1 = Application(application_number='SEVA-999555', user_id=uuid.UUID(user_id), service_id=service1.id, status='READY_FOR_REVIEW')
+    app2 = Application(application_number='SEVA-999666', user_id=uuid.UUID(user_id), service_id=service2.id, status='READY_FOR_REVIEW')
+    db_session.add_all([app1, app2])
+    await db_session.commit()
+
+    # Test explicit request
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Prepare my Income Certificate application for submission.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should resolve strictly to the Income Certificate (app1)
+    assert data['application_id'] == str(app1.id)
+    assert data['status'] == 'CONSENT_REQUIRED'
+    assert 'consent' in data['reply'].lower() or 'approve' in data['reply'].lower()
+
+    # Cleanup
+    await db_session.delete(app1)
+    await db_session.delete(app2)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_generic_info_request_with_existing_app(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Get service
+    res_s = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service = res_s.scalar_one()
+
+    # Create READY_FOR_REVIEW application
+    app_num = 'SEVA-999777'
+    application = Application(
+        application_number=app_num,
+        user_id=uuid.UUID(user_id),
+        service_id=service.id,
+        status='READY_FOR_REVIEW',
+        form_data={},
+        remarks='Test app'
+    )
+    db_session.add(application)
+    await db_session.commit()
+
+    # Test info request
+    payload = {
+        'citizen_id': user_id,
+        'message': 'What documents are required for an Income Certificate?'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should NOT submit or request consent, just provide info but link to existing app
+    assert data['application_id'] == str(application.id)
+    assert data['status'] == 'READY_FOR_REVIEW'
+    assert 'consent' not in data['reply'].lower()
+
+    # Cleanup
+    await db_session.delete(application)
+    await db_session.commit()
