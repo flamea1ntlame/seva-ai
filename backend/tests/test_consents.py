@@ -45,7 +45,7 @@ async def test_service(db_session: AsyncSession):
         code="income_certificate",
         title="Income Certificate",
         department="Revenue",
-        required_documents=["identity_proof"],
+        required_documents=["identity_proof", "income_proof"],
         required_fields=["annual_income"]
     )
     db_session.add(service)
@@ -67,13 +67,13 @@ async def test_consent_creation_snapshot_and_audit(db_session: AsyncSession, tes
         application_number="TEST-APP-001",
         user_id=test_citizen.id,
         service_id=test_service.id,
-        status=ApplicationState.READY_FOR_REVIEW
+        status=ApplicationState.DISCOVER
     )
     db_session.add(app)
     await db_session.commit()
     await db_session.refresh(app)
 
-    # Add verified document
+    # Add verified document with ALL required data so it reaches READY_FOR_REVIEW
     doc = Document(
         id=uuid.uuid4(),
         user_id=test_citizen.id,
@@ -82,21 +82,36 @@ async def test_consent_creation_snapshot_and_audit(db_session: AsyncSession, tes
         title="ID",
         file_path="/dummy.pdf",
         verification_status="VERIFIED",
-        extracted_data={"name": "Rahul Kumar"}
+        extracted_data={"name": "Rahul Kumar", "annual_income": "50000"}
     )
     db_session.add(doc)
+    doc2 = Document(
+        id=uuid.uuid4(),
+        user_id=test_citizen.id,
+        application_id=app_id,
+        document_type="income_proof",
+        title="Income",
+        file_path="/inc.pdf",
+        verification_status="VERIFIED",
+        extracted_data={"annual_income": "50000"}
+    )
+    db_session.add(doc2)
     await db_session.commit()
+
+    # Engine will link the document
+    engine = WorkflowEngine(db_session)
+    await engine.advance_application(app.id)
 
     # Create consent via tool
     res = await tool_request_consent(
-        db_session, 
-        application_id=str(app.id), 
-        data_requested=["identity_proof"], 
-        requesting_department="Revenue", 
+        db_session,
+        application_id=str(app.id),
+        data_requested=["identity_proof"],
+        requesting_department="Revenue",
         purpose="Verification"
     )
     assert "consent_id" in res
-    
+
     await db_session.refresh(app)
     assert app.status == ApplicationState.CONSENT_REQUIRED
 
@@ -106,9 +121,7 @@ async def test_consent_creation_snapshot_and_audit(db_session: AsyncSession, tes
     assert consent.status == "PENDING"
     assert consent.data_snapshot["form_data"]["name"] == "Rahul Kumar"
     assert consent.data_snapshot["application_id"] == str(app.id)
-    assert len(consent.data_snapshot["documents"]) == 1
-    assert consent.data_snapshot["documents"][0]["type"] == "identity_proof"
-    assert consent.data_snapshot["documents"][0]["id"] == str(doc.id)
+    assert len(consent.data_snapshot["documents"]) == 2
 
     # Verify AuditLog
     result = await db_session.execute(
@@ -129,7 +142,7 @@ async def test_consent_approval_and_submission(client: AsyncClient, db_session: 
         status=ApplicationState.CONSENT_REQUIRED
     )
     db_session.add(app)
-    
+
     consent = Consent(
         id=uuid.uuid4(),
         user_id=test_citizen.id,
@@ -176,7 +189,7 @@ async def test_consent_denial(client: AsyncClient, db_session: AsyncSession, tes
         status=ApplicationState.CONSENT_REQUIRED
     )
     db_session.add(app)
-    
+
     consent = Consent(
         id=uuid.uuid4(),
         user_id=test_citizen.id,
@@ -195,7 +208,7 @@ async def test_consent_denial(client: AsyncClient, db_session: AsyncSession, tes
         json={"action": "deny"},
         headers=citizen_token_headers
     )
-    
+
     assert res.status_code == 200
     assert res.json()["status"] == "DENIED"
 
@@ -216,7 +229,7 @@ async def test_consent_ownership_and_immutability(client: AsyncClient, db_sessio
         status=ApplicationState.CONSENT_REQUIRED
     )
     db_session.add(app)
-    
+
     consent = Consent(
         id=uuid.uuid4(),
         user_id=test_admin.id,
@@ -263,7 +276,7 @@ async def test_data_modification_invalidates_consent(db_session: AsyncSession, t
         status=ApplicationState.CONSENT_REQUIRED
     )
     db_session.add(app)
-    
+
     consent = Consent(
         id=uuid.uuid4(),
         user_id=test_citizen.id,
@@ -277,6 +290,18 @@ async def test_data_modification_invalidates_consent(db_session: AsyncSession, t
     db_session.add(consent)
     await db_session.commit()
 
+    # To avoid COLLECTING_DOCUMENTS, we need identity_proof too
+    doc_id = Document(
+        id=uuid.uuid4(),
+        user_id=test_citizen.id,
+        application_id=app_id,
+        document_type="identity_proof",
+        title="ID",
+        file_path="/id.pdf",
+        verification_status="VERIFIED",
+        extracted_data={"name": "Test"}
+    )
+
     # Add a document that wasn't in snapshot
     doc = Document(
         id=uuid.uuid4(),
@@ -286,8 +311,9 @@ async def test_data_modification_invalidates_consent(db_session: AsyncSession, t
         title="Income",
         file_path="/dummy2.pdf",
         verification_status="VERIFIED",
-        extracted_data={"income": "50000"}
+        extracted_data={"annual_income": "50000"}
     )
+    db_session.add(doc_id)
     db_session.add(doc)
     await db_session.commit()
 
@@ -297,6 +323,6 @@ async def test_data_modification_invalidates_consent(db_session: AsyncSession, t
 
     await db_session.refresh(consent)
     assert consent.status == "DENIED" # Invalidated
-    
+
     await db_session.refresh(app)
-    assert app.status == ApplicationState.COLLECTING_DOCUMENTS
+    assert app.status == ApplicationState.READY_FOR_REVIEW

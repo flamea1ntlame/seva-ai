@@ -99,7 +99,9 @@ export default function ApplicationDetailPage() {
             )}
 
             <div className="space-y-1">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-500 block">Submitted On</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-500 block">
+                {['SUBMITTING', 'SUBMITTED', 'TRACKING', 'COMPLETED'].includes(application.status) ? 'Submitted On' : 'Started On'}
+              </span>
               <div className="flex items-center space-x-1.5 text-sm font-medium text-brand-900">
                 <Calendar className="h-4 w-4 text-brand-400" />
                 <span>{new Date(application.created_at).toLocaleDateString()}</span>

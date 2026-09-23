@@ -30,7 +30,12 @@ class WorkflowEngine:
         if the requirements for the next state are met.
         Only advances automatically up to READY_FOR_REVIEW.
         """
-        result = await self.db.execute(select(Application).where(Application.id == application_id))
+        from sqlalchemy.orm import selectinload
+        result = await self.db.execute(
+            select(Application)
+            .options(selectinload(Application.linked_documents))
+            .where(Application.id == application_id)
+        )
         app = result.scalar_one_or_none()
         if not app:
             raise ValueError(f"Application {application_id} not found")
@@ -61,33 +66,66 @@ class WorkflowEngine:
             )
         )
         docs = result.scalars().all()
-        
-        uploaded_doc_types = {doc.document_type for doc in docs}
-        verified_docs = [doc for doc in docs if doc.verification_status == "VERIFIED"]
-        
-        # Merge profile
+
+        # EXACT SELECTION: Pick the deterministic "best" document for each required type
+        # We sort by created_at desc, then ID to ensure stability
+        docs_by_type = {}
+        from datetime import datetime
+        for doc in sorted(docs, key=lambda d: (d.created_at or datetime.min, str(d.id)), reverse=True):
+            if doc.document_type not in docs_by_type:
+                docs_by_type[doc.document_type] = []
+            docs_by_type[doc.document_type].append(doc)
+
+        selected_docs = []
+        uploaded_doc_types = set()
+        has_unverified = False
+
+        for req_type in required_docs:
+            if req_type in docs_by_type:
+                uploaded_doc_types.add(req_type)
+                # prioritize verified, otherwise take latest unverified
+                verified_for_type = [d for d in docs_by_type[req_type] if d.verification_status == "VERIFIED"]
+                if verified_for_type:
+                    selected_docs.append(verified_for_type[0])
+                else:
+                    selected_docs.append(docs_by_type[req_type][0])
+                    has_unverified = True
+
+        verified_selected_docs = [doc for doc in selected_docs if doc.verification_status == "VERIFIED"]
+
+        # Merge profile carefully
         merged_profile = {}
-        for doc in verified_docs:
+        for doc in verified_selected_docs:
             if doc.extracted_data and isinstance(doc.extracted_data, dict):
                 for key, val in doc.extracted_data.items():
                     if val is not None and key not in merged_profile:
                         merged_profile[key] = val
-                        
+
         missing_docs = [doc for doc in required_docs if doc not in uploaded_doc_types]
         missing_fields = [field for field in required_fields if field not in merged_profile]
-        
-        has_unverified = any(doc.document_type in required_docs and doc.verification_status == "PENDING" for doc in docs)
-        
+
+        # Persist selected documents and form_data ONLY if we are updating state
+        # Actually, let's always keep it up to date
+        app.linked_documents = selected_docs
+
+        # Safe form_data merge: preserve existing
+        existing_form_data = app.form_data or {}
+        new_form_data = dict(existing_form_data)
+        for k, v in merged_profile.items():
+            if k not in new_form_data or not new_form_data[k]:
+                new_form_data[k] = v
+        app.form_data = new_form_data
+
         doc_identities = []
-        for doc in sorted(verified_docs, key=lambda d: str(d.id)):
+        for doc in sorted(verified_selected_docs, key=lambda d: str(d.id)):
             doc_identities.append({"id": str(doc.id), "type": doc.document_type})
-            
+
         current_data = {
             "application_id": str(app.id),
-            "form_data": merged_profile,
+            "form_data": new_form_data,
             "documents": doc_identities
         }
-        
+
         # Invalidate consent if data changed
         if app.status == ApplicationState.CONSENT_REQUIRED:
             from app.models import Consent
@@ -111,7 +149,7 @@ class WorkflowEngine:
                         resource_type="consent", resource_id=str(latest_consent.id), user_id=app.user_id
                     )
                     await self.db.commit()
-        
+
         new_status = app.status
 
         if missing_docs:
@@ -125,22 +163,26 @@ class WorkflowEngine:
             new_status = ApplicationState.MISSING_INFORMATION
         elif app.status not in [ApplicationState.CONSENT_REQUIRED, ApplicationState.SUBMITTING, ApplicationState.SUBMITTED, ApplicationState.TRACKING, ApplicationState.COMPLETED]:
             new_status = ApplicationState.READY_FOR_REVIEW
-            
+
         if new_status != app.status:
             await self._change_status(app, new_status)
-            
+        else:
+            self.db.add(app)
+            await self.db.commit()
+            await self.db.refresh(app)
+
         return app.status
 
     async def _change_status(self, app: Application, new_status: str):
         old_status = app.status
         app.status = new_status
-        
+
         event_name = f"APPLICATION_{new_status}"
         if new_status == ApplicationState.READY_FOR_REVIEW:
             event_name = "APPLICATION_READY_FOR_REVIEW"
         elif new_status == ApplicationState.COLLECTING_DOCUMENTS:
             event_name = "DOCUMENTS_REQUIRED"
-            
+
         event = ApplicationEvent(
             application_id=app.id,
             event_type=event_name,
@@ -149,7 +191,7 @@ class WorkflowEngine:
             created_by=app.user_id,
         )
         self.db.add(event)
-        
+
         await log_audit_event(
             self.db, actor_type="SYSTEM", action="WORKFLOW_STATE_CHANGE",
             resource_type="application", resource_id=str(app.id), user_id=app.user_id,

@@ -323,7 +323,12 @@ async def tool_request_consent(db: AsyncSession, application_id: str, data_reque
     except ValueError:
         return {"error": "Invalid application_id UUID format."}
 
-    result = await db.execute(select(Application).where(Application.id == app_uuid))
+    from sqlalchemy.orm import selectinload
+    result = await db.execute(
+        select(Application)
+        .options(selectinload(Application.linked_documents))
+        .where(Application.id == app_uuid)
+    )
     app = result.scalar_one_or_none()
     if not app:
         return {"error": f"Application '{application_id}' not found."}
@@ -331,24 +336,18 @@ async def tool_request_consent(db: AsyncSession, application_id: str, data_reque
     if app.status != ApplicationState.READY_FOR_REVIEW:
         return {"error": f"Application must be in READY_FOR_REVIEW state to request consent. Current status is {app.status}."}
 
-    # Gather data snapshot
-    result = await db.execute(select(Document).where(Document.user_id == app.user_id, Document.verification_status == "VERIFIED"))
-    docs = result.scalars().all()
+    # Gather data snapshot from exactly the linked documents
+    docs = app.linked_documents
     
-    merged_profile = {}
     doc_identities = []
     
     # Sort docs by ID to ensure deterministic comparison
     for doc in sorted(docs, key=lambda d: str(d.id)):
         doc_identities.append({"id": str(doc.id), "type": doc.document_type})
-        if doc.extracted_data and isinstance(doc.extracted_data, dict):
-            for key, val in doc.extracted_data.items():
-                if val is not None and key not in merged_profile:
-                    merged_profile[key] = val
 
     snapshot = {
         "application_id": str(app.id),
-        "form_data": merged_profile,
+        "form_data": app.form_data or {},
         "documents": doc_identities
     }
 

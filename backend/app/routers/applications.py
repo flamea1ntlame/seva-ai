@@ -85,7 +85,7 @@ async def get_application(
     
     result = await db.execute(
         select(Application)
-        .options(selectinload(Application.service))
+        .options(selectinload(Application.service), selectinload(Application.linked_documents))
         .where(Application.id == application_id)
     )
     app = result.scalar_one_or_none()
@@ -96,11 +96,7 @@ async def get_application(
     if app.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this application")
         
-    # Fetch associated documents
-    doc_result = await db.execute(
-        select(Document).where(Document.application_id == application_id)
-    )
-    documents = doc_result.scalars().all()
+    documents = app.linked_documents
     
     app_data = {
         "id": app.id,
@@ -170,7 +166,7 @@ async def preview_application(
     # 1. Fetch application and service
     result = await db.execute(
         select(Application)
-        .options(selectinload(Application.service))
+        .options(selectinload(Application.service), selectinload(Application.linked_documents))
         .where(Application.id == application_id)
     )
     app = result.scalar_one_or_none()
@@ -181,11 +177,7 @@ async def preview_application(
     if app.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    # 2. Fetch associated documents
-    doc_result = await db.execute(
-        select(Document).where(Document.application_id == application_id)
-    )
-    documents = doc_result.scalars().all()
+    documents = app.linked_documents
     
     # 3. Fetch pending consent
     consent_result = await db.execute(

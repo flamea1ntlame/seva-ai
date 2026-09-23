@@ -2,12 +2,20 @@ import uuid
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from sqlalchemy import (
-    String, Text, Boolean, Integer, Numeric, Date, DateTime, ForeignKey, JSON, func
+    String, Text, Boolean, Integer, Numeric, Date, DateTime, ForeignKey, JSON, func, Table, Column
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.database import Base
+
+
+application_documents = Table(
+    "application_documents",
+    Base.metadata,
+    Column("application_id", UUID(as_uuid=True), ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True),
+    Column("document_id", UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class User(Base):
@@ -165,6 +173,9 @@ class Application(Base):
     service = relationship("Service", back_populates="applications")
     events = relationship(
         "ApplicationEvent", back_populates="application", cascade="all, delete-orphan"
+    )
+    linked_documents: Mapped[List["Document"]] = relationship(
+        "Document", secondary="application_documents"
     )
 
     @property
