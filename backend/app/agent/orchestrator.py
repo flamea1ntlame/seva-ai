@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import anthropic
+
 
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import (
@@ -28,16 +28,18 @@ async def run_agent_workflow(
 ) -> Dict[str, Any]:
     """
     Orchestrates the AI agent reasoning and tool execution loop.
-    Uses Anthropic Claude API with Tool Use when ANTHROPIC_API_KEY is available,
+    Uses Gemini API with Tool Use when GEMINI_API_KEY is available,
     or internal deterministic tool execution engine as fallback.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    from app.config import settings
+    api_key = settings.GEMINI_API_KEY
+    model_name = settings.GEMINI_MODEL
 
     if api_key:
         try:
-            return await _run_claude_tool_workflow(message, citizen_id, db, api_key)
+            return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name)
         except Exception as e:
-            logger.warning(f"Claude API call failed: {e}. Falling back to internal engine.")
+            logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
 
     return await _run_fallback_tool_workflow(message, citizen_id, db)
 
@@ -45,7 +47,7 @@ async def run_agent_workflow(
 async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: AsyncSession) -> Dict[str, Any]:
     """Executes backend tool calls validated against database."""
     from app.events import notifier
-    
+
     activity_map = {
         "list_services": "Checking available services...",
         "get_service_requirements": "Checking service requirements...",
@@ -55,10 +57,10 @@ async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: As
         "request_consent": "Preparing your consent request...",
         "submit_application": "Submitting your application..."
     }
-    
+
     activity = activity_map.get(tool_name, "Processing...")
     app_id = tool_args.get("application_id", "")
-    
+
     notifier.broadcast(
         user_id=citizen_id,
         event="AGENT_ACTIVITY",
@@ -76,7 +78,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: As
         return await tool_create_application(db, code, citizen_id)
     elif tool_name == "extract_document_data":
         doc_id = tool_args.get("document_id")
-        return await tool_extract_document_data(db, doc_id)
+        return await tool_extract_document_data(db, doc_id, citizen_id)
     elif tool_name == "get_citizen_profile":
         return await tool_get_citizen_profile(db, citizen_id)
     elif tool_name == "request_consent":
@@ -92,77 +94,138 @@ async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: As
         return {"error": f"Unknown tool '{tool_name}'"}
 
 
-async def _run_claude_tool_workflow(
+async def _run_gemini_tool_workflow(
     message: str,
     citizen_id: str,
     db: AsyncSession,
-    api_key: str
+    api_key: str,
+    model_name: str
 ) -> Dict[str, Any]:
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    messages = [{"role": "user", "content": message}]
+    from google import genai
+    from google.genai import types
 
-    response = await client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        tools=TOOLS_SCHEMA,
-        messages=messages,
+    client = genai.Client(api_key=api_key)
+
+    def map_type(t: str) -> str:
+        mapping = {
+            "string": "STRING",
+            "object": "OBJECT",
+            "array": "ARRAY",
+            "boolean": "BOOLEAN",
+            "integer": "INTEGER",
+            "number": "NUMBER"
+        }
+        return mapping.get(t.lower(), "STRING")
+
+    def convert_schema(schema: dict):
+        if not schema:
+            return None
+        res = {}
+        if "type" in schema:
+            res["type"] = map_type(schema["type"])
+        if "description" in schema:
+            res["description"] = schema["description"]
+        if "properties" in schema:
+            res["properties"] = {k: convert_schema(v) for k, v in schema["properties"].items()}
+        if "items" in schema:
+            res["items"] = convert_schema(schema["items"])
+        if "required" in schema:
+            res["required"] = schema["required"]
+        return res
+
+    declarations = []
+    for t in TOOLS_SCHEMA:
+        decl = types.FunctionDeclaration(
+            name=t["name"],
+            description=t["description"],
+            parameters=convert_schema(t["input_schema"])
+        )
+        declarations.append(decl)
+
+    gemini_tool = types.Tool(function_declarations=declarations)
+
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        tools=[gemini_tool],
+        temperature=0.2
     )
+
+    messages = [
+        types.Content(role="user", parts=[types.Part.from_text(text=message)])
+    ]
 
     created_app_info = None
     service_reqs = None
     target_service_code = None
 
-    while response.stop_reason == "tool_use":
-        tool_results = []
-        assistant_content = response.content
-        messages.append({"role": "assistant", "content": assistant_content})
+    from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
+    from google.genai.errors import APIError
 
-        for block in assistant_content:
-            if block.type == "tool_use":
-                t_name = block.name
-                t_args = block.input
-                if t_name in ["create_application", "get_citizen_profile"]:
-                    t_args["citizen_id"] = citizen_id
-                t_result = await _execute_tool(t_name, t_args, citizen_id, db)
-                print(f"DEBUG: tool {t_name} returned {t_result}")
+    def is_transient_error(e):
+        if isinstance(e, APIError):
+            if e.code in [429, 500, 502, 503, 504]:
+                return True
+        return False
 
-                if isinstance(t_result, dict):
-                    if "application_id" in t_result or "current_status" in t_result:
-                        if created_app_info is None:
-                            created_app_info = {}
-                        if "application_id" in t_result:
-                            created_app_info["application_id"] = t_result["application_id"]
-                        if "current_status" in t_result:
-                            created_app_info["current_status"] = t_result["current_status"]
-                        if "service_code" in t_result:
-                            target_service_code = t_result.get("service_code")
-
-                if t_name == "get_service_requirements" and "service_code" in t_result:
-                    service_reqs = t_result
-                    target_service_code = t_result.get("service_code")
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(t_result)
-                })
-
-        messages.append({"role": "user", "content": tool_results})
-        print(f"DEBUG: sending to LLM. created_app_info={created_app_info}")
-
-        response = await client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS_SCHEMA,
-            messages=messages,
+    @retry(
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        stop=stop_after_attempt(6),
+        retry=retry_if_exception(is_transient_error),
+        reraise=True
+    )
+    async def call_gemini():
+        return await client.aio.models.generate_content(
+            model=model_name,
+            contents=messages,
+            config=config
         )
 
-    reply_text = ""
-    for block in response.content:
-        if block.type == "text":
-            reply_text += block.text
+    response = await call_gemini()
+
+    while response.function_calls:
+        # Append the model's response to history
+        # Function calls are returned as parts in the model's response
+        messages.append(types.Content(role="model", parts=response.candidates[0].content.parts))
+
+        function_responses = []
+        for fc in response.function_calls:
+            t_name = fc.name
+            t_args = fc.args
+
+            if t_name in ["create_application", "get_citizen_profile"]:
+                t_args["citizen_id"] = citizen_id
+
+            t_result = await _execute_tool(t_name, t_args, citizen_id, db)
+            print(f"DEBUG: tool {t_name} returned {t_result}")
+
+            if isinstance(t_result, dict):
+                if "application_id" in t_result or "current_status" in t_result:
+                    if created_app_info is None:
+                        created_app_info = {}
+                    if "application_id" in t_result:
+                        created_app_info["application_id"] = t_result["application_id"]
+                    if "current_status" in t_result:
+                        created_app_info["current_status"] = t_result["current_status"]
+                    if "service_code" in t_result:
+                        target_service_code = t_result.get("service_code")
+
+            if t_name == "get_service_requirements" and "service_code" in t_result:
+                service_reqs = t_result
+                target_service_code = t_result.get("service_code")
+
+            function_responses.append(
+                types.Part.from_function_response(
+                    name=t_name,
+                    response=t_result
+                )
+            )
+
+        messages.append(types.Content(role="user", parts=function_responses))
+        print(f"DEBUG: sending to LLM. created_app_info={created_app_info}")
+
+        response = await call_gemini()
+
+    reply_text = response.text if response.text else ""
 
     return {
         "reply": reply_text,

@@ -10,80 +10,130 @@ logger = logging.getLogger(__name__)
 
 async def extract_document_fields(file_path: str, document_type: str) -> Dict[str, Any]:
     """
-    Extracts structured JSON data from a document file using Claude Vision API
+    Extracts structured JSON data from a document file using Gemini Vision API
     or deterministic fallback extraction rules.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    from app.config import settings
+    api_key = settings.GEMINI_API_KEY
+    model_name = settings.GEMINI_MODEL
 
     if api_key and os.path.exists(file_path):
         try:
-            return await _extract_with_claude_vision(file_path, document_type, api_key)
+            return await _extract_with_gemini_vision(file_path, document_type, api_key, model_name)
         except Exception as e:
-            logger.warning(f"Claude Vision API extraction failed: {e}. Using deterministic fallback.")
+            logger.warning(f"Gemini Vision API extraction failed: {e}. Using deterministic fallback.")
 
     return _extract_with_fallback(file_path, document_type)
 
 
-async def _extract_with_claude_vision(file_path: str, document_type: str, api_key: str) -> Dict[str, Any]:
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+async def _extract_with_gemini_vision(file_path: str, document_type: str, api_key: str, model_name: str) -> Dict[str, Any]:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
 
     with open(file_path, "rb") as f:
         file_bytes = f.read()
 
-    b64_data = base64.b64encode(file_bytes).decode("utf-8")
-
     # Determine media type
     ext = os.path.splitext(file_path)[1].lower()
-    media_type = "image/png"
+    media_type = None
     if ext in [".jpg", ".jpeg"]:
         media_type = "image/jpeg"
+    elif ext == ".png":
+        media_type = "image/png"
+    elif ext == ".webp":
+        media_type = "image/webp"
     elif ext == ".pdf":
         media_type = "application/pdf"
+
+    if not media_type:
+        raise ValueError(f"Unsupported file extension: {ext}")
+
+    schemas = {
+        "identity_proof": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING"},
+                "dob": {"type": "STRING"},
+                "address": {"type": "STRING"},
+                "id_number": {"type": "STRING"}
+            }
+        },
+        "income_proof": {
+            "type": "OBJECT",
+            "properties": {
+                "annual_income": {"type": "NUMBER"},
+                "employer": {"type": "STRING"}
+            }
+        },
+        "address_proof": {
+            "type": "OBJECT",
+            "properties": {
+                "address": {"type": "STRING"}
+            }
+        },
+        "hospital_certificate": {
+            "type": "OBJECT",
+            "properties": {
+                "applicant_name": {"type": "STRING"},
+                "date_of_birth": {"type": "STRING"},
+                "place_of_birth": {"type": "STRING"},
+                "mother_name": {"type": "STRING"},
+                "father_name": {"type": "STRING"}
+            }
+        },
+        "medical_declaration": {
+            "type": "OBJECT",
+            "properties": {
+                "blood_group": {"type": "STRING"},
+                "fitness_confirmed": {"type": "BOOLEAN"}
+            }
+        }
+    }
+
+    req_schema = schemas.get(document_type, {"type": "OBJECT", "properties": {"extracted_text": {"type": "STRING"}}})
 
     prompt = (
         f"You are a document OCR and extraction AI for official government documents.\n"
         f"Extract key fields for document type '{document_type}'.\n"
-        f"Return ONLY a raw JSON object with no markdown formatting or commentary.\n"
-        f"Fields to extract for '{document_type}':\n"
-        f"- identity_proof: name, dob, address, id_number\n"
-        f"- income_proof: annual_income, employer\n"
-        f"- address_proof: address\n"
-        f"- hospital_certificate: applicant_name, date_of_birth, place_of_birth, mother_name, father_name\n"
-        f"- medical_declaration: blood_group, fitness_confirmed\n"
     )
 
-    message_content = []
-    if media_type == "application/pdf":
-        message_content.append({
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": b64_data
-            }
-        })
-    else:
-        message_content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64_data
-            }
-        })
+    contents = [
+        types.Part.from_bytes(data=file_bytes, mime_type=media_type),
+        prompt
+    ]
 
-    message_content.append({"type": "text", "text": prompt})
-
-    response = await client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": message_content}],
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=req_schema,
+        temperature=0.0
     )
 
-    text_resp = ""
-    for block in response.content:
-        if block.type == "text":
-            text_resp += block.text
+    from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
+    from google.genai.errors import APIError
+
+    def is_transient_error(e):
+        if isinstance(e, APIError):
+            if e.code in [429, 500, 502, 503, 504]:
+                return True
+        return False
+
+    @retry(
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        stop=stop_after_attempt(6),
+        retry=retry_if_exception(is_transient_error),
+        reraise=True
+    )
+    async def call_gemini():
+        return await client.aio.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config
+        )
+
+    response = await call_gemini()
+    text_resp = response.text if response.text else "{}"
 
     # Clean markdown formatting if present
     text_resp = text_resp.strip()

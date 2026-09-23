@@ -221,21 +221,49 @@ async def tool_create_application(db: AsyncSession, service_code: str, citizen_i
     }
 
 
-async def tool_extract_document_data(db: AsyncSession, document_id: str) -> Dict[str, Any]:
+async def tool_extract_document_data(db: AsyncSession, document_id: str, citizen_id: str) -> Dict[str, Any]:
     try:
         doc_uuid = uuid.UUID(document_id)
+        user_uuid = uuid.UUID(citizen_id)
     except ValueError:
-        return {"error": "Invalid document_id UUID format."}
+        return {"error": "Invalid UUID format."}
 
-    result = await db.execute(select(Document).where(Document.id == doc_uuid))
+    result = await db.execute(select(Document).where(Document.id == doc_uuid, Document.user_id == user_uuid))
     doc = result.scalar_one_or_none()
     if not doc:
-        return {"error": f"Document with ID '{document_id}' not found."}
+        return {"error": f"Document with ID '{document_id}' not found or you do not have permission to access it."}
 
-    extracted = await extract_document_fields(doc.file_path, doc.document_type)
-    doc.extracted_data = extracted
-    doc.verification_status = "VERIFIED"
-    doc.verified = True
+    import os
+    from app.config import settings
+    tmp_path = os.path.join("/tmp", f"{uuid.uuid4()}_extract.pdf")
+    extracted = None
+
+    try:
+        # Download from Supabase
+        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY and doc.file_path.startswith("documents/"):
+            from supabase import create_client
+            sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+            res = sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).download(doc.file_path)
+            with open(tmp_path, "wb") as f:
+                f.write(res)
+        else:
+            # Fallback for old local files if any (e.g., seed data)
+            tmp_path = doc.file_path
+
+        extracted = await extract_document_fields(tmp_path, doc.document_type)
+    except Exception as e:
+        return {"error": f"Failed to process document: {str(e)}"}
+    finally:
+        if tmp_path.startswith("/tmp") and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+    if extracted is not None:
+        doc.extracted_data = extracted
+        doc.verification_status = "VERIFIED"
+        doc.verified = True
 
     await log_audit_event(
         db, actor_type="AI_AGENT", action="DOCUMENT_VERIFIED",

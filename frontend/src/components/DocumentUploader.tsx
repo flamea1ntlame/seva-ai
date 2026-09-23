@@ -43,8 +43,8 @@ export default function DocumentUploader({ onUpload, uploading }: DocumentUpload
   };
 
   const handleFile = async (file: File) => {
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("File size must be less than 10MB");
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File size must be less than 5MB");
       return;
     }
     await onUpload(file, selectedType);

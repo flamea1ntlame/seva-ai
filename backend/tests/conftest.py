@@ -44,3 +44,30 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
     app.dependency_overrides.clear()
+
+@pytest.fixture(autouse=True)
+def mock_supabase(monkeypatch):
+    import os
+    from unittest.mock import MagicMock
+
+    # Mock settings so we hit the supabase branches
+    from app.config import settings
+    monkeypatch.setattr(settings, "SUPABASE_URL", "http://mock-supabase.local")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-key")
+    monkeypatch.setattr(settings, "SUPABASE_STORAGE_BUCKET", "seva-documents")
+
+    mock_client = MagicMock()
+
+    def mock_download(path):
+        # We need to return some bytes representing a file
+        return b"mock file content"
+
+    mock_client.storage.from_().download.side_effect = mock_download
+    mock_client.storage.from_().upload.return_value = None
+    mock_client.storage.from_().remove.return_value = None
+
+    def mock_create_client(url, key):
+        return mock_client
+
+    monkeypatch.setattr("supabase.create_client", mock_create_client)
+    return mock_client
