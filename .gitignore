@@ -54,3 +54,4 @@ next-env.d.ts
 !.env.example
 backend/uploads/
 logs/
+!frontend/src/lib/
