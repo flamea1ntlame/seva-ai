@@ -3,7 +3,7 @@ import json
 import base64
 import logging
 from typing import Dict, Any, Optional
-import anthropic
+
 
 logger = logging.getLogger(__name__)
 
