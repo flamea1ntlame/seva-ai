@@ -392,3 +392,141 @@ async def test_chat_generic_info_request_with_existing_app(client: AsyncClient, 
     # Cleanup
     await db_session.delete(application)
     await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_multiple_active_apps_explicit_seva_ref(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    res_s1 = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service1 = res_s1.scalar_one()
+
+    # Create two active applications of the SAME service
+    app1 = Application(application_number='SEVA-999888', user_id=uuid.UUID(user_id), service_id=service1.id, status='READY_FOR_REVIEW')
+    app2 = Application(application_number='SEVA-999999', user_id=uuid.UUID(user_id), service_id=service1.id, status='READY_FOR_REVIEW')
+    db_session.add_all([app1, app2])
+    await db_session.commit()
+
+    # Test explicit SEVA reference
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Prepare application SEVA-999888 for submission.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Should resolve strictly to app1
+    assert data['application_id'] == str(app1.id)
+    assert data['status'] == 'CONSENT_REQUIRED'
+    assert 'consent' in data['reply'].lower() or 'approve' in data['reply'].lower()
+
+    # Test invalid SEVA reference
+    payload_invalid = {
+        'citizen_id': user_id,
+        'message': 'Prepare application SEVA-111111 for submission.'
+    }
+    res_invalid = await client.post('/api/chat', json=payload_invalid, headers=headers)
+    assert res_invalid.status_code == 200, res_invalid.text
+    data_invalid = res_invalid.json()
+
+    assert data_invalid['application_id'] is None
+    assert "couldn't find" in data_invalid['reply'].lower()
+
+    # Cleanup
+    await db_session.delete(app1)
+    await db_session.delete(app2)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_chat_cross_user_reference(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    # Login as citizen
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    res_s1 = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service1 = res_s1.scalar_one()
+
+    # Create an app for ANOTHER user
+    other_user_id = str(uuid.uuid4())
+    app_other = Application(application_number='SEVA-222333', user_id=uuid.UUID(other_user_id), service_id=service1.id, status='READY_FOR_REVIEW')
+    db_session.add(app_other)
+    await db_session.commit()
+
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Prepare application SEVA-222333 for submission.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    assert data['application_id'] is None
+    assert "couldn't find" in data['reply'].lower()
+
+    await db_session.delete(app_other)
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_chat_multiple_references(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Prepare SEVA-111111 and SEVA-222222 for submission.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    assert data['application_id'] is None
+    assert 'multiple application numbers' in data['reply'].lower()
+
+
+@pytest.mark.asyncio
+async def test_chat_punctuation_reference(client: AsyncClient, db_session: AsyncSession):
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    res_s1 = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service1 = res_s1.scalar_one()
+
+    app_punct = Application(application_number='SEVA-123456', user_id=uuid.UUID(user_id), service_id=service1.id, status='READY_FOR_REVIEW')
+    db_session.add(app_punct)
+    await db_session.commit()
+
+    payload = {
+        'citizen_id': user_id,
+        'message': 'Please submit SEVA-123456.'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    assert data['application_id'] == str(app_punct.id)
+    assert data['status'] == 'CONSENT_REQUIRED'
+
+    await db_session.delete(app_punct)
+    await db_session.commit()

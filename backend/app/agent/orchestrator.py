@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 import uuid
+import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -54,7 +55,7 @@ async def run_agent_workflow(
         app_context_str = "\n\nCURRENT APPLICATION CONTEXT:\nThe user has the following active/existing applications:\n"
         for app in active_apps:
             app_context_str += (
-                f"- Application ID: {app.id}\n"
+                f"- Application Reference: {app.application_number} (ID: {app.id})\n"
                 f"  Service: {app.service.title} ({app.service.code})\n"
                 f"  Status: {app.status}\n"
             )
@@ -282,8 +283,34 @@ async def _run_fallback_tool_workflow(
     elif "birth" in msg_lower:
         target_service_code = "birth_certificate"
 
-    # Filter active apps if user specified a service
-    if target_service_code:
+    # Filter active apps if user specified explicit SEVA references
+    explicit_refs = re.findall(r"\bseva-\d+\b", msg_lower)
+    if explicit_refs:
+        if len(explicit_refs) > 1:
+            return {
+                "reply": "You mentioned multiple application numbers. Could you please specify which one you want to proceed with?",
+                "application_id": None,
+                "service_code": None,
+                "status": None,
+                "required_documents": [],
+                "required_fields": [],
+            }
+
+        explicit_ref = explicit_refs[0].upper()
+        matched_app = next((a for a in active_apps if a.application_number == explicit_ref), None)
+        if matched_app:
+            active_apps = [matched_app]
+        else:
+            return {
+                "reply": f"I couldn't find that application ({explicit_ref}) in your active profile.",
+                "application_id": None,
+                "service_code": None,
+                "status": None,
+                "required_documents": [],
+                "required_fields": [],
+            }
+    elif target_service_code:
+        # Filter active apps if user specified a service and no explicit SEVA ref
         matching_apps = [a for a in active_apps if a.service.code == target_service_code]
         # Only restrict if it narrows it down
         if matching_apps:
