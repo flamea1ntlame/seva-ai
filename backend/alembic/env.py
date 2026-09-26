@@ -25,8 +25,13 @@ target_metadata = Base.metadata
 
 def get_url():
     url = settings.SYNC_DATABASE_URL
-    if url.startswith("postgresql+asyncpg"):
-        url = url.replace("postgresql+asyncpg", "postgresql")
+    for prefix in ("postgresql+asyncpg", "postgresql+psycopg3", "postgresql+psycopg", "postgres"):
+        if url.startswith(prefix + "://"):
+            url = "postgresql://" + url[len(prefix) + 3:]
+            break
+        elif url.startswith(prefix):
+            url = url.replace(prefix, "postgresql", 1)
+            break
     return url
 
 
