@@ -40,7 +40,7 @@ async def get_vault_stats(
     total = result_total.scalar() or 0
 
     result_verified = await db.execute(
-        select(func.count(Document.id)).where(Document.user_id == current_user.id, Document.verification_status == "VERIFIED")
+        select(func.count(Document.id)).where(Document.user_id == current_user.id, Document.verification_status.in_(["VERIFIED", "OCR_EXTRACTED"]))
     )
     verified = result_verified.scalar() or 0
 
@@ -95,6 +95,7 @@ async def upload_document(
             pass
 
     import re
+    import hashlib
     file_id = str(uuid.uuid4())
 
     # 1. ACTUAL FILENAME SANITIZATION
@@ -106,10 +107,14 @@ async def upload_document(
 
     tmp_path = os.path.join("/tmp", safe_filename)
 
+    hasher = hashlib.sha256()
     with open(tmp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        while chunk := file.file.read(65536):
+            buffer.write(chunk)
+            hasher.update(chunk)
 
     file_size = os.path.getsize(tmp_path)
+    sha256_hash = hasher.hexdigest()
 
     from app.config import settings
     object_key = f"documents/{citizen_id}/{file_id}/{safe_filename}"
@@ -128,7 +133,7 @@ async def upload_document(
             )
             sb_uploaded = True
 
-        # Initial Document row with status PENDING
+        # Initial Document row with status NOT_CHECKED
         doc = Document(
             id=uuid.UUID(file_id),
             user_id=current_user.id,
@@ -139,7 +144,9 @@ async def upload_document(
             file_size=file_size,
             mime_type=file.content_type,
             verified=False,
-            verification_status="PENDING",
+            verification_status="NOT_CHECKED",
+            sha256_hash=sha256_hash,
+            verification_details=None,
             extracted_data=None
         )
         db.add(doc)
@@ -147,11 +154,22 @@ async def upload_document(
         db_committed = True
         await db.refresh(doc)
 
-        # Run extraction engine
+        # Run pretrained OCR extraction pipeline
         extracted = await extract_document_fields(tmp_path, document_type)
+        ocr_status = extracted.get("_ocr_status", "OCR_EXTRACTED") if isinstance(extracted, dict) else "OCR_EXTRACTED"
+
         doc.extracted_data = extracted
-        doc.verification_status = "VERIFIED"
-        doc.verified = True
+        doc.verification_status = ocr_status
+        # Crucial: OCR extraction does NOT confer authenticity verification
+        doc.verified = False
+        doc.verification_details = {
+            "sha256": sha256_hash,
+            "ocr_engine": extracted.get("_ocr_engine", "paddleocr") if isinstance(extracted, dict) else "none",
+            "ocr_status": ocr_status,
+            "confidence_score": extracted.get("_confidence_score", 0.0) if isinstance(extracted, dict) else 0.0,
+            "warnings": extracted.get("_warnings", []) if isinstance(extracted, dict) else [],
+            "field_confidence": extracted.get("fields", {}) if isinstance(extracted, dict) else {},
+        }
 
         await db.commit()
         await db.refresh(doc)

@@ -259,6 +259,17 @@ export function getDocumentStatusInfo(
     };
   }
 
+  if (norm === "OCR_EXTRACTED") {
+    return {
+      label: "Verification in Progress",
+      symbol: "⏳",
+      badgeClass: "bg-blue-50 text-blue-700 border-blue-200",
+      citizenExplanation: "Document data has been digitally extracted. Verification in progress.",
+      isVerified: false,
+      needsAttention: false,
+    };
+  }
+
   if (norm === "REJECTED" || norm === "SUSPICIOUS") {
     return {
       label: "Rejected",

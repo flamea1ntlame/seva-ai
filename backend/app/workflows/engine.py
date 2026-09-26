@@ -84,14 +84,14 @@ class WorkflowEngine:
             if req_type in docs_by_type:
                 uploaded_doc_types.add(req_type)
                 # prioritize verified, otherwise take latest unverified
-                verified_for_type = [d for d in docs_by_type[req_type] if d.verification_status == "VERIFIED"]
+                verified_for_type = [d for d in docs_by_type[req_type] if d.verification_status in ("VERIFIED", "OCR_EXTRACTED")]
                 if verified_for_type:
                     selected_docs.append(verified_for_type[0])
                 else:
                     selected_docs.append(docs_by_type[req_type][0])
                     has_unverified = True
 
-        verified_selected_docs = [doc for doc in selected_docs if doc.verification_status == "VERIFIED"]
+        verified_selected_docs = [doc for doc in selected_docs if doc.verification_status in ("VERIFIED", "OCR_EXTRACTED")]
 
         # Merge profile carefully
         merged_profile = {}

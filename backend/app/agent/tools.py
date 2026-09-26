@@ -56,7 +56,7 @@ TOOLS_SCHEMA = [
     },
     {
         "name": "extract_document_data",
-        "description": "Processes an uploaded document with Vision OCR, extracts key structured fields, updates verification_status to VERIFIED, and returns extracted data.",
+        "description": "Processes an uploaded document with pretrained OCR, extracts key structured fields, updates verification_status to OCR_EXTRACTED, and returns extracted data.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -292,11 +292,13 @@ async def tool_extract_document_data(db: AsyncSession, document_id: str, citizen
 
     if extracted is not None:
         doc.extracted_data = extracted
-        doc.verification_status = "VERIFIED"
-        doc.verified = True
+        ocr_status = extracted.get("_ocr_status", "OCR_EXTRACTED") if isinstance(extracted, dict) else "OCR_EXTRACTED"
+        doc.verification_status = ocr_status
+        # OCR extraction does NOT confer authenticity verification
+        doc.verified = False
 
     await log_audit_event(
-        db, actor_type="AI_AGENT", action="DOCUMENT_VERIFIED",
+        db, actor_type="AI_AGENT", action="DOCUMENT_OCR_EXTRACTED",
         resource_type="document", resource_id=str(doc.id),
         user_id=doc.user_id, details={"document_type": doc.document_type}
     )
@@ -325,7 +327,7 @@ async def tool_get_citizen_profile(db: AsyncSession, citizen_id: str) -> Dict[st
     result = await db.execute(
         select(Document).where(
             Document.user_id == user_uuid,
-            Document.verification_status == "VERIFIED"
+            Document.verification_status.in_(["VERIFIED", "OCR_EXTRACTED"])
         )
     )
     docs = result.scalars().all()

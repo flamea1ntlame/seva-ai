@@ -48,7 +48,7 @@ class ApplicationSubmissionService:
         docs = result.scalars().all()
         
         uploaded_doc_types = {doc.document_type for doc in docs}
-        verified_docs = [doc for doc in docs if doc.verification_status == "VERIFIED"]
+        verified_docs = [doc for doc in docs if doc.verification_status in ("VERIFIED", "OCR_EXTRACTED")]
         
         merged_profile = {}
         for doc in verified_docs:
