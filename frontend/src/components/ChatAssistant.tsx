@@ -7,6 +7,7 @@ import { useEventContext } from "@/contexts/EventContext";
 import DocumentUploader from "./DocumentUploader";
 import ApplicationPreview from "./ApplicationPreview";
 import DocumentCard from "./DocumentCard";
+import MarkdownRenderer from "./MarkdownRenderer";
 import {
   Send,
   Sparkles,
@@ -17,6 +18,7 @@ import {
   AlertTriangle,
   FileCheck2,
   Check,
+  Bot
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -45,14 +47,7 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
   const { user } = useAuth();
   const { agentActivity } = useEventContext();
   
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome-1",
-      sender: "assistant",
-      text: `Good morning, ${user?.full_name?.split(' ')[0] || "Citizen"}.\n\nI am SEVA, your government services assistant.\n\nWhat do you need help with today?`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -199,7 +194,7 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
 
   if (showConsentPreview && currentAppId) {
     return (
-      <div className="bg-white rounded-2xl shadow-sm border border-brand-200 flex flex-col h-[700px] overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-brand-200 flex flex-col h-full overflow-hidden">
         <ApplicationPreview 
           applicationId={currentAppId} 
           onEdit={() => {
@@ -224,44 +219,53 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
     );
   }
 
-  // Pre-fill suggestions if no user messages
   const hasUserMessages = messages.some(m => m.sender === "user");
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-brand-200 flex flex-col h-[700px] overflow-hidden">
+    <div className="bg-white rounded-2xl shadow-sm border border-brand-200 flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 flex items-center justify-between border-b border-brand-100 bg-white">
+      <div className="px-5 py-4 flex items-center justify-between border-b border-brand-100 bg-white">
         <div className="flex items-center space-x-3">
-          <div className="h-8 w-8 rounded-lg bg-primary-50 flex items-center justify-center text-primary-600 border border-primary-100">
-            <Sparkles className="h-4 w-4" />
+          <div className="h-10 w-10 rounded-xl bg-primary-50 flex items-center justify-center text-primary-600 border border-primary-100">
+            <Bot className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="font-bold text-sm text-brand-900 tracking-wide">SEVA Assistant</h3>
-            <p className="text-[11px] text-brand-500 font-medium">Always here to help</p>
+            <h3 className="font-bold text-base text-brand-900 tracking-tight">SEVA Citizen Assistant</h3>
+            <p className="text-xs text-brand-500 font-medium mt-0.5">Your guide to government services</p>
           </div>
         </div>
+        {currentAppId && (
+          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-md bg-success-50 border border-success-200 text-[10px] font-bold text-success-700 tracking-wider">
+            <div className="h-1.5 w-1.5 rounded-full bg-success-500 mr-1.5 animate-pulse"></div>
+            ACTIVE APPLICATION LINKED
+          </div>
+        )}
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 overflow-y-auto bg-brand-50/30 p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto bg-brand-50/50 p-4 sm:p-6 space-y-6">
         {messages.map((msg, i) => (
           <div key={msg.id} className={`flex items-end space-x-2.5 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
             
             {msg.sender === "assistant" && (
               <div className="h-7 w-7 rounded-full bg-primary-100 border border-primary-200 flex items-center justify-center shrink-0 mb-1">
-                <Sparkles className="h-3.5 w-3.5 text-primary-700" />
+                <Bot className="h-3.5 w-3.5 text-primary-700" />
               </div>
             )}
 
-            <div className={`max-w-[80%] flex flex-col space-y-2 ${msg.sender === "user" ? "items-end" : "items-start"}`}>
+            <div className={`max-w-[85%] flex flex-col space-y-2 ${msg.sender === "user" ? "items-end" : "items-start"}`}>
               <div 
-                className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed shadow-xs ${
+                className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed shadow-sm ${
                   msg.sender === "user" 
                     ? "bg-brand-900 text-white rounded-br-sm" 
-                    : "bg-white text-brand-800 border border-brand-200 rounded-bl-sm"
+                    : "bg-white border border-brand-200 rounded-bl-sm"
                 }`}
               >
-                <div className="whitespace-pre-line">{msg.text}</div>
+                {msg.sender === "user" ? (
+                  <div className="whitespace-pre-line">{msg.text}</div>
+                ) : (
+                  <MarkdownRenderer content={msg.text} />
+                )}
               </div>
 
               {/* Structured UI inside Bot Bubble */}
@@ -269,7 +273,7 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
                 <div className="w-full bg-white rounded-xl border border-brand-200 p-4 shadow-sm space-y-4">
                   <div className="flex items-center space-x-2">
                     <ShieldCheck className="h-4 w-4 text-primary-500" />
-                    <span className="text-xs font-bold text-brand-900 uppercase tracking-wider">
+                    <span className="text-[11px] font-bold text-brand-900 uppercase tracking-wider">
                       {msg.service_code.replace(/_/g, ' ')}
                     </span>
                   </div>
@@ -323,16 +327,26 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
         ))}
 
         {!hasUserMessages && (
-          <div className="pt-4 flex flex-col space-y-2 pl-10">
-            <button onClick={() => handleSend("I want to apply for an Income Certificate")} className="text-left px-4 py-2.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 rounded-xl text-xs font-semibold text-brand-700 transition-colors w-fit">
-              Apply for an Income Certificate
-            </button>
-            <button onClick={() => handleSend("Get a Birth Certificate")} className="text-left px-4 py-2.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 rounded-xl text-xs font-semibold text-brand-700 transition-colors w-fit">
-              Get a Birth Certificate
-            </button>
-            <button onClick={() => handleSend("Apply for a Driving Licence")} className="text-left px-4 py-2.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 rounded-xl text-xs font-semibold text-brand-700 transition-colors w-fit">
-              Apply for a Driving Licence
-            </button>
+          <div className="flex flex-col items-center justify-center h-full py-10 space-y-6">
+            <div className="flex flex-col items-center space-y-3">
+              <span className="text-4xl mb-2">✨</span>
+              <h2 className="text-xl font-extrabold text-brand-900 tracking-tight">How can SEVA help?</h2>
+              <p className="text-sm text-brand-500 text-center max-w-[280px]">Tell me what government service you need. I'll guide you through the process.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-[440px] pt-4">
+              <button onClick={() => handleSend("Apply for an Income Certificate")} className="px-4 py-3.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 hover:shadow-sm rounded-xl text-[13px] font-semibold text-brand-700 transition-all text-center">
+                Income Certificate
+              </button>
+              <button onClick={() => handleSend("Get a Birth Certificate")} className="px-4 py-3.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 hover:shadow-sm rounded-xl text-[13px] font-semibold text-brand-700 transition-all text-center">
+                Birth Certificate
+              </button>
+              <button onClick={() => handleSend("Apply for a Driving Licence")} className="px-4 py-3.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 hover:shadow-sm rounded-xl text-[13px] font-semibold text-brand-700 transition-all text-center">
+                Driving Licence
+              </button>
+              <button onClick={() => handleSend("What documents do I need?")} className="px-4 py-3.5 bg-white border border-brand-200 hover:border-primary-300 hover:bg-primary-50 hover:shadow-sm rounded-xl text-[13px] font-semibold text-brand-700 transition-all text-center">
+                What documents do I need?
+              </button>
+            </div>
           </div>
         )}
 
@@ -355,20 +369,26 @@ export default function ChatAssistant({ onApplicationCreated }: { onApplicationC
       <div className="p-4 bg-white border-t border-brand-100">
         <form 
           onSubmit={(e) => { e.preventDefault(); handleSend(); }} 
-          className="flex items-center space-x-2 bg-brand-50 border border-brand-200 rounded-2xl px-2 py-1.5 focus-within:ring-2 focus-within:ring-primary-500 focus-within:border-transparent transition-all"
+          className="flex items-end space-x-2 bg-brand-50 border border-brand-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-primary-500 focus-within:border-transparent transition-all shadow-sm"
         >
-          <input
-            type="text"
+          <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             placeholder="Tell SEVA what you need..."
-            className="flex-1 bg-transparent text-sm px-3 py-2 focus:outline-none text-brand-900 placeholder:text-brand-400"
+            className="flex-1 bg-transparent text-[13px] px-3 py-2.5 min-h-[44px] max-h-[120px] resize-none focus:outline-none text-brand-900 placeholder:text-brand-400 font-medium"
             disabled={loading || uploading}
+            rows={1}
           />
           <button
             type="submit"
             disabled={loading || uploading || !input.trim()}
-            className="h-9 w-9 bg-brand-900 hover:bg-brand-800 disabled:bg-brand-300 text-white rounded-xl flex items-center justify-center transition-colors shrink-0"
+            className="h-[44px] w-[44px] bg-brand-900 hover:bg-brand-800 disabled:bg-brand-200 disabled:text-brand-400 text-white rounded-xl flex items-center justify-center transition-colors shrink-0 mb-0 shadow-sm"
           >
             <Send className="h-4 w-4 ml-0.5" />
           </button>

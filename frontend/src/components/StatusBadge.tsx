@@ -4,6 +4,11 @@ import { Clock, CheckCircle2, AlertCircle, RefreshCw, AlertTriangle, Send } from
 export function getStatusConfig(status: string, government_status?: string) {
   // If government status exists and SEVA status is SUBMITTED, TRACKING, or COMPLETED, prioritize government status
   const effectiveStatus = government_status || status;
+  let label = effectiveStatus.replace("_", " ");
+  if (effectiveStatus === "READY_FOR_REVIEW") label = "Review Required";
+  else if (effectiveStatus === "SUBMITTED") label = "Submitted";
+  else if (effectiveStatus === "TRACKING") label = "Under Review";
+  else if (effectiveStatus === "COMPLETED") label = "Completed";
 
   switch (effectiveStatus) {
     case "COMPLETED":
@@ -12,28 +17,29 @@ export function getStatusConfig(status: string, government_status?: string) {
       return {
         color: "bg-success-50 text-success-700 border-success-200",
         icon: <CheckCircle2 className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
+        label: label,
       };
     case "REJECTED":
       return {
         color: "bg-error-50 text-error-700 border-error-200",
         icon: <AlertCircle className="h-3 w-3" />,
-        label: "REJECTED",
+        label: label,
       };
     case "MISSING_INFORMATION":
     case "CONSENT_REQUIRED":
     case "ACTION_REQUIRED":
+    case "READY_FOR_REVIEW":
       return {
         color: "bg-warning-50 text-warning-800 border-warning-200",
         icon: <AlertTriangle className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
+        label: label,
       };
     case "SUBMITTING":
     case "SUBMITTED":
       return {
         color: "bg-primary-50 text-primary-700 border-primary-200",
         icon: <Send className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
+        label: label,
       };
     case "UNDER_REVIEW":
     case "TRACKING":
@@ -42,13 +48,13 @@ export function getStatusConfig(status: string, government_status?: string) {
       return {
         color: "bg-brand-100 text-brand-700 border-brand-200",
         icon: <RefreshCw className="h-3 w-3 animate-spin" />,
-        label: effectiveStatus.replace("_", " "),
+        label: label,
       };
     default:
       return {
         color: "bg-brand-50 text-brand-600 border-brand-200",
         icon: <Clock className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
+        label: label,
       };
   }
 }
