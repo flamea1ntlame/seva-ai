@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { fetchApi } from "@/lib/api";
+import { fetchApi, getApiBaseUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useEventContext } from "@/contexts/EventContext";
 import ApplicationTimeline from "@/components/ApplicationTimeline";
@@ -103,7 +103,7 @@ export default function ApplicationDetailPage() {
     try {
       const token = localStorage.getItem("seva_token");
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/documents/upload`,
+        `${getApiBaseUrl()}/api/documents/upload`,
         {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : {},

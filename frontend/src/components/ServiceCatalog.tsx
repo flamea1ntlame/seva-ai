@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { fetchApi } from "@/lib/api";
 import {
@@ -81,7 +81,9 @@ export default function ServiceCatalog({
   const [loadingReqs, setLoadingReqs] = useState(false);
   const [startingApp, setStartingApp] = useState(false);
 
-  useEffect(() => {
+  const loadServices = useCallback(() => {
+    setLoading(true);
+    setError(null);
     fetchApi("/api/services/")
       .then((data) => {
         setServices(Array.isArray(data) ? data : []);
@@ -91,6 +93,10 @@ export default function ServiceCatalog({
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadServices();
+  }, [loadServices]);
 
   const loadRequirements = async (service: ServiceItem) => {
     setSelectedService(service);
@@ -228,9 +234,17 @@ export default function ServiceCatalog({
 
       {/* Error state */}
       {error && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-sm flex items-center space-x-2">
-          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
-          <span>{error}</span>
+        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-sm flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => loadServices()}
+            className="px-3 py-1 bg-white border border-rose-300 text-rose-700 text-xs font-semibold rounded-lg hover:bg-rose-100 transition shrink-0"
+          >
+            Retry
+          </button>
         </div>
       )}
 

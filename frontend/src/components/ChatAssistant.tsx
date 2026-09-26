@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { fetchApi } from "@/lib/api";
+import { fetchApi, getApiBaseUrl } from "@/lib/api";
 import { useEventContext } from "@/contexts/EventContext";
 import DocumentUploader from "./DocumentUploader";
 import ApplicationPreview from "./ApplicationPreview";
@@ -302,7 +302,7 @@ export default function ChatAssistant({
     try {
       const token = localStorage.getItem("seva_token");
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/documents/upload`,
+        `${getApiBaseUrl()}/api/documents/upload`,
         {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : {},
