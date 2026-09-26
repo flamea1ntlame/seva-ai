@@ -33,25 +33,31 @@ PHRASE_NORMALIZATIONS = [
     (r"\blearning\s+licence\b", "learner licence"),
     (r"\blearning\s+license\b", "learner licence"),
     (r"\bnew\s+born\b", "newborn"),
+    (r"\bbrth\s+crt\b", "birth certificate"),
+    (r"\bbirth\s+crt\b", "birth certificate"),
+    (r"\bbrth\s+cert\b", "birth certificate"),
+    (r"\bbrth\s+certificate\b", "birth certificate"),
+    (r"\bincm\s+crt\b", "income certificate"),
+    (r"\bincome\s+crt\b", "income certificate"),
     (r"\bjanma\s+praman\s+patra\b", "birth certificate"),
     (r"\baavadhi\s+praman\s+patra\b", "income certificate"),
     (r"\baaye\s+praman\s+patra\b", "income certificate"),
     (r"\baay\s+praman\s+patra\b", "income certificate"),
     
-    # Native Devanagari script normalizations
-    (r"आय\s*प्रमाण\s*पत्र", "income certificate"),
-    (r"आय\s*प्रमाणपत्र", "income certificate"),
-    (r"जन्म\s*प्रमाण\s*पत्र", "birth certificate"),
-    (r"जन्म\s*प्रमाणपत्र", "birth certificate"),
-    (r"ड्राइविंग\s*लाइसेंस", "driving licence"),
-    (r"ड्राइविंग\s*लाइसेन्स", "driving licence"),
+    # Native Devanagari script normalizations (preserve native characters while attaching service marker)
+    (r"आय\s*प्रमाण\s*पत्र", "आय प्रमाण पत्र income certificate"),
+    (r"आय\s*प्रमाणपत्र", "आय प्रमाण पत्र income certificate"),
+    (r"जन्म\s*प्रमाण\s*पत्र", "जन्म प्रमाण पत्र birth certificate"),
+    (r"जन्म\s*प्रमाणपत्र", "जन्म प्रमाण पत्र birth certificate"),
+    (r"ड्राइविंग\s*लाइसेंस", "ड्राइविंग लाइसेंस driving licence"),
+    (r"ड्राइविंग\s*लाइसेन्स", "ड्राइविंग लाइसेंस driving licence"),
 
-    # Native Kannada script normalizations
-    (r"ಆದಾಯ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "income certificate"),
-    (r"ಆದಾಯ\s*ಪ್ರಮಾಣಪತ್ರ", "income certificate"),
-    (r"ಜನನ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "birth certificate"),
-    (r"ಜನನ\s*ಪ್ರಮಾಣಪತ್ರ", "birth certificate"),
-    (r"ಚಾಲನಾ\s*ಪರವಾನಗಿ", "driving licence"),
+    # Native Kannada script normalizations (preserve native characters while attaching service marker)
+    (r"ಆದಾಯ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ income certificate"),
+    (r"ಆದಾಯ\s*ಪ್ರಮಾಣಪತ್ರ", "ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ income certificate"),
+    (r"ಜನನ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "ಜನನ ಪ್ರಮಾಣಪತ್ರ birth certificate"),
+    (r"ಜನನ\s*ಪ್ರಮಾಣಪತ್ರ", "ಜನನ ಪ್ರಮಾಣಪತ್ರ birth certificate"),
+    (r"ಚಾಲನಾ\s*ಪರವಾನಗಿ", "ಚಾಲನಾ ಪರವಾನಗಿ driving licence"),
 ]
 
 # Word-level typo and spelling mappings (strictly genuine typos, NO semantic mutations)
@@ -62,6 +68,9 @@ WORD_NORMALIZATIONS: Dict[str, str] = {
     "incm": "income",
     "salery": "salary",
     
+    # Birth variations
+    "brth": "birth",
+
     # Certificate variations
     "certifcate": "certificate",
     "certficate": "certificate",
@@ -70,6 +79,8 @@ WORD_NORMALIZATIONS: Dict[str, str] = {
     "certificat": "certificate",
     "cert": "certificate",
     "certs": "certificates",
+    "crt": "certificate",
+    "crts": "certificates",
     
     # Scholarship variations
     "scholership": "scholarship",

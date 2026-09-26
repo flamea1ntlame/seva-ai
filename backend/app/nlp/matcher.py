@@ -61,6 +61,16 @@ def match_intent_and_service(
             entities["jurisdiction"] = state
             break
 
+    if "jurisdiction" not in entities:
+        # Check for explicit user-specified jurisdiction: "in <state>", "for state <state>", "in jurisdiction <state>"
+        j_match = re.search(r"\b(?:in state|for state|in jurisdiction|for jurisdiction|in)\s+([a-zA-Z\-_]+)\b", text)
+        if j_match:
+            candidate = j_match.group(1).lower().strip()
+            stopwords = {"the", "a", "an", "this", "my", "our", "advance", "need", "application", "order", "portal", "seva", "english", "kannada", "hindi", "karnataka"}
+            if candidate not in stopwords and len(candidate) > 2:
+                entities["jurisdiction"] = candidate
+
+
     # Detect document types mentioned (differentiating parent ID vs applicant ID)
     doc_types = []
     if "parent" in text and ("aadhaar" in text or "id" in text or "voter" in text or "passport" in text or "pan" in text):

@@ -184,6 +184,28 @@ async def tool_create_application(db: AsyncSession, service_code: str, citizen_i
     if not service:
         return {"error": f"Service code '{service_code}' does not exist."}
 
+    # Idempotency check: reuse existing active application for this citizen and service
+    existing_res = await db.execute(
+        select(Application).where(
+            Application.user_id == user_uuid,
+            Application.service_id == service.id,
+            Application.status.in_([
+                "DISCOVER", "COLLECTING_DOCUMENTS", "EXTRACTING",
+                "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
+                "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
+            ])
+        ).order_by(Application.created_at.desc())
+    )
+    existing_app = existing_res.scalars().first()
+    if existing_app:
+        return {
+            "application_id": str(existing_app.id),
+            "application_number": existing_app.application_number,
+            "current_status": existing_app.status,
+            "service_code": service_code,
+            "message": "Reused existing active application."
+        }
+
     app_num = f"SEVA-{random.randint(100000, 999999)}"
 
     application = Application(

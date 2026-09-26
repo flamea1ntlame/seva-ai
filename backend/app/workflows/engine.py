@@ -137,8 +137,6 @@ class WorkflowEngine:
             )
             latest_consent = result_consent.scalars().first()
             if latest_consent and latest_consent.status in ["PENDING", "APPROVED"]:
-                print("SNAPSHOT:", latest_consent.data_snapshot)
-                print("CURRENT:", current_data)
                 if latest_consent.data_snapshot != current_data:
                     # Invalidate
                     latest_consent.status = "DENIED" # or some invalid status, but DENIED is safe
@@ -153,13 +151,10 @@ class WorkflowEngine:
         new_status = app.status
 
         if missing_docs:
-            print("MISSING DOCS:", missing_docs)
             new_status = ApplicationState.COLLECTING_DOCUMENTS
         elif has_unverified:
-            print("UNVERIFIED DOCS")
             new_status = ApplicationState.EXTRACTING
         elif missing_fields:
-            print("MISSING FIELDS:", missing_fields)
             new_status = ApplicationState.MISSING_INFORMATION
         elif app.status not in [ApplicationState.CONSENT_REQUIRED, ApplicationState.SUBMITTING, ApplicationState.SUBMITTED, ApplicationState.TRACKING, ApplicationState.COMPLETED]:
             new_status = ApplicationState.READY_FOR_REVIEW
