@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
@@ -181,7 +181,8 @@ class ChatResponse(BaseModel):
     missing_documents: List[str] = []
     verified_documents: List[str] = []
     clarification_options: List[str] = []
-    jurisdiction: Optional[Any] = None
+    jurisdiction: Optional[str] = None
+    jurisdiction_notice: Optional[Dict[str, Any]] = None
     responsible_officer: Optional[str] = None
 
 

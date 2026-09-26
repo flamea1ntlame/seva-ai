@@ -2,7 +2,7 @@
 SEVA AI - Privacy & PII Protection Module
 
 Redacts and masks sensitive identifiers (Aadhaar, PAN, phone numbers) before audit
-persistence and logging, in compliance with DPDP and UIDAI guidelines.
+persistence and before dispatching outbound requests to LLMs (Gemini API).
 Preserves necessary context (e.g. last 4 digits) for audit/debugging.
 """
 
@@ -11,13 +11,13 @@ from typing import Dict, Any
 
 
 # Aadhaar: 12-digit number (e.g. 1234 5678 9012 or 123456789012 or 1234-5678-9012)
-AADHAAR_REGEX = re.compile(r"\b(\d{4})[ -]?(\d{4})[ -]?(\d{4})\b")
+AADHAAR_REGEX = re.compile(r"\b(\d{4})[\s\-_]?(\d{4})[\s\-_]?(\d{4})\b")
 
-# PAN: 5 uppercase letters, 4 digits, 1 uppercase letter (e.g. ABCDE1234F)
-PAN_REGEX = re.compile(r"\b([A-Z]{5})(\d{4})([A-Z])\b", re.IGNORECASE)
+# PAN: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)
+PAN_REGEX = re.compile(r"\b([A-Za-z]{5})[\s\-_]?(\d{4})[\s\-_]?([A-Za-z])\b")
 
-# Indian Phone Numbers: 10 digits starting with 6-9, optionally with +91 or 0 prefix
-PHONE_REGEX = re.compile(r"\b(?:\+91[\-\s]?|0)?([6-9]\d{5})(\d{4})\b")
+# Indian Phone Numbers: 10 digits starting with 6-9, with optional +91, 91, or 0 prefix and spaces/dashes
+PHONE_REGEX = re.compile(r"(?:\+91[\s\-_]?|\b91[\s\-_]?)?(?:\b0)?([6-9]\d{1,5})[\s\-_]?(\d{1,5})[\s\-_]?(\d{4})\b")
 
 
 def mask_pii(text: str) -> str:
@@ -30,7 +30,7 @@ def mask_pii(text: str) -> str:
     if not text:
         return ""
 
-    masked = text
+    masked = str(text)
 
     # Mask Aadhaar
     def _mask_aadhaar(match):
@@ -49,26 +49,26 @@ def mask_pii(text: str) -> str:
 
     # Mask Phone
     def _mask_phone(match):
-        last4 = match.group(2)
-        return f"XXXXXX{last4}"
+        digits = match.group(0)
+        last4 = re.findall(r"\d", digits)[-4:]
+        return f"XXXXXX" + "".join(last4)
 
     masked = PHONE_REGEX.sub(_mask_phone, masked)
 
     return masked
 
 
-def sanitize_audit_details(details: Dict[str, Any]) -> Dict[str, Any]:
+def sanitize_audit_details(details: Any) -> Any:
     """
-    Returns a copy of audit details with all string values masked for PII.
+    Recursively sanitizes data structures (dicts, lists, strings) to redact sensitive PII.
     """
-    sanitized = {}
-    for k, v in details.items():
-        if isinstance(v, str):
-            sanitized[k] = mask_pii(v)
-        elif isinstance(v, dict):
-            sanitized[k] = sanitize_audit_details(v)
-        elif isinstance(v, list):
-            sanitized[k] = [mask_pii(item) if isinstance(item, str) else item for item in v]
-        else:
-            sanitized[k] = v
-    return sanitized
+    if isinstance(details, str):
+        return mask_pii(details)
+    elif isinstance(details, dict):
+        return {k: sanitize_audit_details(v) for k, v in details.items()}
+    elif isinstance(details, list):
+        return [sanitize_audit_details(item) for item in details]
+    elif isinstance(details, tuple):
+        return tuple(sanitize_audit_details(item) for item in details)
+    else:
+        return details

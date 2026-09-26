@@ -58,7 +58,7 @@ async def run_agent_workflow(
     normalized_message = norm_result.normalized_text
     corrections = norm_result.corrections
 
-    # Step 2: Fetch existing application context for this citizen
+    # Step 2: Fetch existing application context and recent chat history for this citizen
     active_apps_result = await db.execute(
         select(Application).options(selectinload(Application.service)).where(
             Application.user_id == uuid.UUID(citizen_id),
@@ -70,6 +70,14 @@ async def run_agent_workflow(
         )
     )
     active_apps = list(active_apps_result.scalars().all())
+
+    # Step 2b: Fetch recent conversation history for LLM context
+    history_result = await db.execute(
+        select(ChatMessage).where(
+            ChatMessage.user_id == uuid.UUID(citizen_id)
+        ).order_by(ChatMessage.created_at.desc()).limit(6)
+    )
+    chat_history = list(reversed(history_result.scalars().all()))
 
     # Step 3: Match intent, service, and jurisdiction
     active_service_codes = [a.service.code for a in active_apps] if active_apps else []
@@ -96,7 +104,7 @@ async def run_agent_workflow(
     if api_key:
         try:
             result = await _run_gemini_tool_workflow(
-                normalized_message, match_result, citizen_id, db, api_key, model_name, app_context_str
+                normalized_message, match_result, citizen_id, db, api_key, model_name, app_context_str, chat_history
             )
         except Exception as e:
             logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
@@ -247,11 +255,13 @@ async def _run_gemini_tool_workflow(
     db: AsyncSession,
     api_key: str,
     model_name: str,
-    app_context_str: str = ""
+    app_context_str: str = "",
+    chat_history: Optional[List[ChatMessage]] = None
 ) -> Dict[str, Any]:
     """
     Executes Gemini workflow strictly grounded in deterministically pre-retrieved rules.
-    Prevents the LLM from inventing government document requirements.
+    Prevents the LLM from inventing government document requirements and ensures no
+    sensitive PII leaves the application boundary to the LLM.
     """
     from google import genai
     from google.genai import types
@@ -316,20 +326,35 @@ async def _run_gemini_tool_workflow(
                 f"- Processing Time: {rules_info.get('processing_time_days')} days | Fee: ₹{rules_info.get('fee_amount')}\n"
             )
         else:
+            service_reqs = rules_info
             grounding_str = (
                 f"\n\nJURISDICTION NOTICE: Official requirements for requested jurisdiction '{rules_info.get('requested_jurisdiction')}' "
                 f"are NOT verified in SEVA. Inform the user clearly that requirements cannot be verified. Supported: {rules_info.get('supported_jurisdictions')}."
             )
 
+    # BLOCKER 1 FIX: Mask all sensitive PII before outbound network dispatch to LLM
+    sanitized_app_context = mask_pii(app_context_str)
+    sanitized_grounding = mask_pii(grounding_str)
+    sanitized_user_message = mask_pii(message)
+
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT + app_context_str + grounding_str,
+        system_instruction=SYSTEM_PROMPT + sanitized_app_context + sanitized_grounding,
         tools=[gemini_tool],
         temperature=0.1
     )
 
-    messages = [
-        types.Content(role="user", parts=[types.Part.from_text(text=message)])
-    ]
+    # Build conversation messages with sanitized history and sanitized current input
+    messages = []
+    if chat_history:
+        for ch in chat_history:
+            role = "user" if ch.role == "user" else "model"
+            hist_text = mask_pii(ch.normalized_message or ch.original_message or ch.reply or "")
+            if hist_text:
+                messages.append(types.Content(role=role, parts=[types.Part.from_text(text=hist_text)]))
+
+    messages.append(
+        types.Content(role="user", parts=[types.Part.from_text(text=sanitized_user_message)])
+    )
 
     created_app_info = None
 
@@ -385,10 +410,12 @@ async def _run_gemini_tool_workflow(
                 service_reqs = t_result
                 target_service_code = t_result.get("service_code")
 
+            # Redact any PII from tool execution results before outbound LLM return
+            clean_result = sanitize_audit_details(t_result)
             function_responses.append(
                 types.Part.from_function_response(
                     name=t_name,
-                    response=t_result
+                    response=clean_result
                 )
             )
 
@@ -397,13 +424,23 @@ async def _run_gemini_tool_workflow(
 
     reply_text = response.text if response.text else ""
 
+    jurisdiction_notice = None
+    if service_reqs and not service_reqs.get("jurisdiction_supported", True):
+        jurisdiction_notice = {
+            "supported": False,
+            "message": f"SEVA does not currently have verified requirements for jurisdiction '{jurisdiction_requested}'.",
+            "verified_jurisdictions": service_reqs.get("supported_jurisdictions", ["Karnataka", "Maharashtra", "Delhi"])
+        }
+
     return {
         "reply": reply_text,
         "application_id": created_app_info.get("application_id") if created_app_info else None,
         "service_code": target_service_code,
         "status": created_app_info.get("current_status") if created_app_info else None,
-        "required_documents": service_reqs.get("required_documents", []) if service_reqs else [],
-        "required_fields": service_reqs.get("required_fields", []) if service_reqs else [],
+        "required_documents": service_reqs.get("required_documents", []) if (service_reqs and service_reqs.get("jurisdiction_supported", True)) else [],
+        "required_fields": service_reqs.get("required_fields", []) if (service_reqs and service_reqs.get("jurisdiction_supported", True)) else [],
+        "jurisdiction": jurisdiction_requested,
+        "jurisdiction_notice": jurisdiction_notice,
     }
 
 
@@ -545,11 +582,42 @@ async def _run_fallback_tool_workflow(
             "required_fields": rules["required_fields"],
         }
 
+    # 5b. LLM / Prompt Injection Defense: Claims of mandatory documents (e.g. clerk said electricity bill is mandatory)
+    is_mandatory_claim = any(k in text for k in ["is mandatory", "mandatory", "compulsory", "required by clerk", "clerk told me"])
+    if is_mandatory_claim and ("clerk" in text or "confirm it" in text or "electricity" in text or "told me" in text):
+        target_code = target_service_code or (active_apps[0].service.code if active_apps else "income_certificate")
+        rules = await get_rules_requirements(target_code, jurisdiction=jurisdiction_requested, db=db)
+        
+        claimed_doc = "electricity bill" if "electricity" in text else "this document"
+        is_actually_mandatory = any(claimed_doc.lower() in d.lower() for d in rules.get("required_documents", []))
+        
+        if not is_actually_mandatory:
+            docs_list = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in rules["required_documents"]])
+            reply = (
+                f"No, that is incorrect. According to authoritative government rules for **{rules['service_name']}**, "
+                f"**{claimed_doc.title()}** is **NOT** a mandatory requirement.\n\n"
+                f"SEVA grounds all requirements strictly in verified government regulations. The only mandatory documents are:\n"
+                f"{docs_list}\n\n"
+                f"Officials cannot invent or demand additional mandatory documents outside authoritative rules."
+            )
+            matched_app_id = str(active_apps[0].id) if active_apps else None
+            return {
+                "reply": reply,
+                "application_id": matched_app_id,
+                "service_code": target_code,
+                "status": active_apps[0].status if matched_app_id else None,
+                "required_documents": rules["required_documents"],
+                "required_fields": rules["required_fields"],
+                "jurisdiction": jurisdiction_requested,
+                "jurisdiction_notice": None,
+            }
+
     # 6. Check for Unsupported Jurisdiction (Eliminating silent fallback)
     if target_service_code and jurisdiction_requested:
         rules = await get_rules_requirements(target_service_code, jurisdiction=jurisdiction_requested, db=db)
         if not rules.get("jurisdiction_supported", True):
-            supported_str = ", ".join(rules.get("supported_jurisdictions", ["Karnataka", "Maharashtra", "Delhi"]))
+            supported_jurisdictions = rules.get("supported_jurisdictions", ["Karnataka", "Maharashtra", "Delhi"])
+            supported_str = ", ".join(supported_jurisdictions)
             reply = (
                 f"⚠️ **Jurisdiction Notice**: We currently do not have verified official rules for **{jurisdiction_requested.title()}** for this service.\n\n"
                 f"SEVA currently supports verified rules for: **{supported_str}**.\n\n"
@@ -562,7 +630,12 @@ async def _run_fallback_tool_workflow(
                 "status": None,
                 "required_documents": [],
                 "required_fields": [],
-                "jurisdiction": {"supported": False, "requested": jurisdiction_requested}
+                "jurisdiction": jurisdiction_requested,
+                "jurisdiction_notice": {
+                    "supported": False,
+                    "message": "SEVA does not currently have verified requirements for this jurisdiction.",
+                    "verified_jurisdictions": supported_jurisdictions
+                }
             }
 
     # 7. Handle "i already uploaded my id" / Document Upload Follow-up

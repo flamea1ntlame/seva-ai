@@ -46,6 +46,7 @@ async def chat_endpoint(
         verified_documents=result.get("verified_documents", []),
         clarification_options=result.get("clarification_options", []),
         jurisdiction=result.get("jurisdiction"),
+        jurisdiction_notice=result.get("jurisdiction_notice"),
         responsible_officer=result.get("responsible_officer"),
     )
 
