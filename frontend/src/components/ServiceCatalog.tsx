@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { fetchApi } from "@/lib/api";
+import { fetchApi, ApiError, handleSessionValidationOn401 } from "@/lib/api";
 import {
   Search,
   Building2,
@@ -106,7 +106,12 @@ export default function ServiceCatalog({
     try {
       const reqs = await fetchApi(`/api/services/${service.code}/requirements`);
       setServiceRequirements(reqs);
-    } catch {
+    } catch (reqErr: any) {
+      const is401 = reqErr instanceof ApiError ? reqErr.status === 401 : reqErr?.status === 401;
+      if (is401) {
+        const isValid = await handleSessionValidationOn401(reqErr, router);
+        if (!isValid) return;
+      }
       // Fallback gracefully to the base service definition from catalog
       setServiceRequirements({
         service_code: service.code,
@@ -127,12 +132,38 @@ export default function ServiceCatalog({
   const handleStartApplication = async (service: ServiceItem) => {
     if (startingApp) return;
 
+    // Check token presence before starting
+    const rawToken =
+      typeof window !== "undefined" && typeof localStorage !== "undefined"
+        ? localStorage.getItem("seva_token")
+        : null;
+    const token =
+      rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
+        ? rawToken.trim()
+        : null;
+
+    if (!token) {
+      if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+        localStorage.removeItem("seva_token");
+      }
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(new CustomEvent("seva:session_expired"));
+      }
+      router.push("/login?session_expired=1");
+      return;
+    }
+
     // Verify jurisdiction support (using cached requirements or fetching fresh)
     let reqs = (selectedService?.id === service.id) ? serviceRequirements : null;
     if (!reqs) {
       try {
         reqs = await fetchApi(`/api/services/${service.code}/requirements`);
-      } catch {
+      } catch (reqErr: any) {
+        const is401 = reqErr instanceof ApiError ? reqErr.status === 401 : reqErr?.status === 401;
+        if (is401) {
+          const isValid = await handleSessionValidationOn401(reqErr, router);
+          if (!isValid) return;
+        }
         // If backend requirements fetch fails, proceed with cautious validation
       }
     }
@@ -171,6 +202,13 @@ export default function ServiceCatalog({
       });
       router.push(`/applications/${app.id}`);
     } catch (err: any) {
+      const is401 = err instanceof ApiError ? err.status === 401 : err?.status === 401;
+      if (is401) {
+        const isValid = await handleSessionValidationOn401(err, router);
+        if (!isValid) {
+          return;
+        }
+      }
       setError(err.message || "Failed to start application. Please try again.");
     } finally {
       setStartingApp(false);

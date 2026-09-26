@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, getApiBaseUrl, fetchApi } from "../src/lib/api.ts";
+import { ApiError, getApiBaseUrl, fetchApi, validateSession, handleSessionValidationOn401 } from "../src/lib/api.ts";
 import backendConfig from "../src/lib/backendConfig.js";
 const { resolveBackendUrl } = backendConfig;
 
@@ -648,4 +648,261 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
     // Must NOT trigger session expired event on login failure
     assert.equal(eventDispatched, false);
   });
+
+  await t.test("27. Regression 13A: Valid token flow: /me 200 -> requirements 200 -> create application 201", async () => {
+    const storage = new Map([["seva_token", "valid_jwt_token_999"]]);
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: () => true,
+      location: { hostname: "localhost" },
+    };
+
+    // 1. /api/auth/me returns 200
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/auth/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cit-1", full_name: "Anita Sharma", email: "anita@example.com" }),
+        };
+      }
+      if (u.includes("/requirements")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ service_code: "income_certificate", required_documents: ["id_proof"] }),
+        };
+      }
+      if (u.includes("/applications/")) {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ id: "app-new-1", application_number: "SEVA-554433", status: "submitted" }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({ detail: "Not found" }) };
+    };
+
+    const me = await fetchApi("/api/auth/me");
+    assert.equal(me.email, "anita@example.com");
+
+    const reqs = await fetchApi("/api/services/income_certificate/requirements");
+    assert.equal(reqs.service_code, "income_certificate");
+
+    const app = await fetchApi("/api/applications/", {
+      method: "POST",
+      body: JSON.stringify({ service_id: "srv-1" }),
+    });
+    assert.equal(app.application_number, "SEVA-554433");
+    assert.equal(storage.get("seva_token"), "valid_jwt_token_999");
+  });
+
+  await t.test("28. Regression 13B: Stale/expired token: 401 on protected action triggers session validation, clears token, and redirects to login", async () => {
+    const storage = new Map([["seva_token", "stale_expired_token_111"]]);
+    let eventDispatched = false;
+    let redirectedTo = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    const mockRouter = {
+      push: (url) => {
+        redirectedTo = url;
+      },
+    };
+
+    // When protected request returns 401, followed by /api/auth/me returning 401
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/applications/")) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ detail: "Could not validate credentials" }),
+        };
+      }
+      if (u.includes("/auth/me")) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ detail: "Could not validate credentials" }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({ detail: "Not found" }) };
+    };
+
+    // Simulate Apply Now action catching 401
+    let caughtErr = null;
+    try {
+      await fetchApi("/api/applications/", { method: "POST", body: "{}" });
+    } catch (err) {
+      caughtErr = err;
+    }
+
+    assert.ok(caughtErr);
+    assert.equal(caughtErr.status, 401);
+
+    // Controlled session validation runs
+    const isValid = await handleSessionValidationOn401(caughtErr, mockRouter);
+
+    assert.equal(isValid, false);
+    assert.equal(storage.has("seva_token"), false, "Stale seva_token must be cleared from storage");
+    assert.equal(eventDispatched, true, "seva:session_expired event must be dispatched");
+    assert.equal(redirectedTo, "/login?session_expired=1", "Citizen must be redirected to login with session_expired=1");
+  });
+
+  await t.test("29. Regression 13C: Background 401 does not incorrectly destroy a still-valid session", async () => {
+    const storage = new Map([["seva_token", "valid_active_token_222"]]);
+    let eventDispatched = false;
+    let redirectedTo = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    const mockRouter = {
+      push: (url) => {
+        redirectedTo = url;
+      },
+    };
+
+    // A background endpoint returns 401 (e.g. transient failure), BUT /api/auth/me returns 200 (token is valid)
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/vault-stats")) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ detail: "Transient auth check failure" }),
+        };
+      }
+      if (u.includes("/auth/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cit-1", full_name: "Citizen", email: "citizen@example.com" }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    let backgroundErr = null;
+    try {
+      await fetchApi("/api/documents/vault-stats");
+    } catch (err) {
+      backgroundErr = err;
+    }
+
+    assert.ok(backgroundErr);
+    assert.equal(backgroundErr.status, 401);
+
+    // Validate session
+    const isValid = await handleSessionValidationOn401(backgroundErr, mockRouter);
+
+    assert.equal(isValid, true, "Session must be deemed valid when /api/auth/me succeeds");
+    assert.equal(storage.get("seva_token"), "valid_active_token_222", "Token must remain intact");
+    assert.equal(eventDispatched, false, "Must not fire session_expired event for valid session");
+    assert.equal(redirectedTo, null, "Must not redirect citizen when session is valid");
+  });
+
+  await t.test("30. Regression 13D: Missing or empty token during Apply Now flow cleanly triggers session validation failure", async () => {
+    const storage = new Map(); // empty storage
+    let eventDispatched = false;
+    let redirectedTo = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    const mockRouter = {
+      push: (url) => {
+        redirectedTo = url;
+      },
+    };
+
+    const isValid = await validateSession();
+    assert.equal(isValid, false);
+    assert.equal(eventDispatched, true);
+
+    const isHandled = await handleSessionValidationOn401(new ApiError("Not authenticated", 401), mockRouter);
+    assert.equal(isHandled, false);
+    assert.equal(redirectedTo, "/login?session_expired=1");
+  });
+
+  await t.test("31. Regression 13E: Token storage key consistency — strictly seva_token is used", async () => {
+    const storage = new Map([["seva_token", "canonical_seva_token"]]);
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      location: { hostname: "localhost" },
+    };
+
+    let authHeaderSent = null;
+    globalThis.fetch = async (url, opts) => {
+      authHeaderSent = opts?.headers?.Authorization || opts?.headers?.authorization || null;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok" }),
+      };
+    };
+
+    await fetchApi("/api/services/");
+    assert.equal(authHeaderSent, "Bearer canonical_seva_token");
+
+    // Setting a fake "token" key in localStorage should NOT be picked up
+    storage.delete("seva_token");
+    storage.set("token", "legacy_fake_token");
+
+    authHeaderSent = null;
+    await fetchApi("/api/services/");
+    assert.equal(authHeaderSent, null, "Legacy 'token' key must NOT be read as seva_token");
+  });
 });
+

@@ -250,3 +250,70 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   }
 }
 
+/**
+ * Validates the current session against /api/auth/me.
+ * If the session is invalid/expired (HTTP 401), clears stale auth state
+ * from localStorage and dispatches the 'seva:session_expired' event.
+ * Returns true if the session is valid, false if invalid/expired.
+ */
+export async function validateSession(): Promise<boolean> {
+  const rawToken =
+    typeof window !== "undefined" && typeof localStorage !== "undefined"
+      ? localStorage.getItem("seva_token")
+      : null;
+  const token =
+    rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
+      ? rawToken.trim()
+      : null;
+
+  if (!token) {
+    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+      localStorage.removeItem("seva_token");
+    }
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("seva:session_expired"));
+    }
+    return false;
+  }
+
+  try {
+    await fetchApi("/api/auth/me");
+    return true;
+  } catch (err: any) {
+    const is401 = err instanceof ApiError ? err.status === 401 : err?.status === 401;
+    if (is401) {
+      if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+        localStorage.removeItem("seva_token");
+      }
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(new CustomEvent("seva:session_expired"));
+      }
+      return false;
+    }
+    // Network or server error (502, 503, offline): do not clear session
+    return true;
+  }
+}
+
+/**
+ * Controlled session validation for protected endpoints.
+ * When a protected endpoint (e.g. applications, requirements, documents, chat)
+ * returns 401, this function verifies if the session is actually invalid via /api/auth/me.
+ * If invalid, it clears stale auth state, dispatches 'seva:session_expired',
+ * and redirects to /login?session_expired=1.
+ */
+export async function handleSessionValidationOn401(
+  err: any,
+  router?: { push: (url: string) => void; replace?: (url: string) => void }
+): Promise<boolean> {
+  const is401 = err instanceof ApiError ? err.status === 401 : err?.status === 401;
+  if (!is401) return true;
+
+  const isValid = await validateSession();
+  if (!isValid && router && typeof router.push === "function") {
+    router.push("/login?session_expired=1");
+  }
+  return isValid;
+}
+
+
