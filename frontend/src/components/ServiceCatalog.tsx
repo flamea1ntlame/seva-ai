@@ -17,6 +17,10 @@ import {
   Info,
 } from "lucide-react";
 import { humanizeKey } from "@/lib/statusMapping";
+import {
+  isJurisdictionSupported,
+  getJurisdictionBlockMessage,
+} from "@/lib/jurisdictionGuard";
 
 export interface ServiceItem {
   id: string;
@@ -115,6 +119,22 @@ export default function ServiceCatalog({
   };
 
   const handleStartApplication = async (service: ServiceItem) => {
+    if (selectedService?.id === service.id && serviceRequirements) {
+      const allowed = isJurisdictionSupported(
+        serviceRequirements.jurisdiction_notice,
+        serviceRequirements.jurisdiction_supported
+      );
+      if (!allowed) {
+        const msg = getJurisdictionBlockMessage(
+          serviceRequirements.jurisdiction_notice,
+          serviceRequirements.jurisdiction_supported,
+          serviceRequirements.jurisdiction
+        );
+        setError(msg || "Official requirements for this jurisdiction are not verified in SEVA. Application creation is disabled.");
+        return;
+      }
+    }
+
     if (onSelectService) {
       onSelectService(service);
       return;
@@ -417,6 +437,22 @@ export default function ServiceCatalog({
                   </div>
                 </div>
 
+                {/* Unsupported Jurisdiction Notice / Blocker */}
+                {!isJurisdictionSupported(serviceRequirements.jurisdiction_notice, serviceRequirements.jurisdiction_supported) && (
+                  <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl space-y-1 text-xs text-amber-950">
+                    <span className="font-extrabold uppercase tracking-wide text-amber-900 block">
+                      Application Disabled: Unverified Jurisdiction
+                    </span>
+                    <p className="leading-relaxed font-medium">
+                      {getJurisdictionBlockMessage(
+                        serviceRequirements.jurisdiction_notice,
+                        serviceRequirements.jurisdiction_supported,
+                        serviceRequirements.jurisdiction
+                      )}
+                    </p>
+                  </div>
+                )}
+
                 {/* Modal CTA */}
                 <div className="pt-4 border-t border-slate-100 flex justify-end space-x-3">
                   <button
@@ -429,14 +465,24 @@ export default function ServiceCatalog({
                   {showStartAction && (
                     <button
                       onClick={() => {
+                        const allowed = isJurisdictionSupported(
+                          serviceRequirements.jurisdiction_notice,
+                          serviceRequirements.jurisdiction_supported
+                        );
+                        if (!allowed) return;
                         setSelectedService(null);
                         handleStartApplication(selectedService);
                       }}
-                      disabled={startingApp}
-                      className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
+                      disabled={startingApp || !isJurisdictionSupported(serviceRequirements.jurisdiction_notice, serviceRequirements.jurisdiction_supported)}
+                      className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 rounded-xl transition flex items-center space-x-1.5 shadow-sm disabled:cursor-not-allowed"
+                      title={!isJurisdictionSupported(serviceRequirements.jurisdiction_notice, serviceRequirements.jurisdiction_supported) ? "Application creation disabled for unverified jurisdiction" : undefined}
                     >
                       <Sparkles className="h-3.5 w-3.5" />
-                      <span>Start Application for {selectedService.title}</span>
+                      <span>
+                        {isJurisdictionSupported(serviceRequirements.jurisdiction_notice, serviceRequirements.jurisdiction_supported)
+                          ? `Start Application for ${selectedService.title}`
+                          : "Application Disabled (Unverified Jurisdiction)"}
+                      </span>
                     </button>
                   )}
                 </div>

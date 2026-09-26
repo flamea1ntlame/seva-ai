@@ -19,9 +19,15 @@ import {
   Square,
   Clock,
   Info,
+  MapPin,
 } from "lucide-react";
 import { DocumentVerificationBadge } from "@/components/StatusBadge";
 import { humanizeKey } from "@/lib/statusMapping";
+import { maskSensitiveValue } from "@/lib/masking";
+import {
+  isJurisdictionSupported,
+  getJurisdictionBlockMessage,
+} from "@/lib/jurisdictionGuard";
 
 interface ApplicationPreviewProps {
   applicationId: string;
@@ -51,9 +57,28 @@ export default function ApplicationPreview({
       .finally(() => setLoading(false));
   }, [applicationId]);
 
+  const jurisdictionAllowed = data
+    ? isJurisdictionSupported(data.jurisdiction_notice, data.jurisdiction_supported)
+    : true;
+  const jurisdictionBlockMsg = data
+    ? getJurisdictionBlockMessage(
+        data.jurisdiction_notice,
+        data.jurisdiction_supported,
+        data.service?.jurisdiction
+      )
+    : null;
+
   const handleApproveAndSubmit = async () => {
     if (!consentAgreed) {
       setError("Please check the declaration box to authorize submission.");
+      return;
+    }
+
+    if (!jurisdictionAllowed) {
+      setError(
+        jurisdictionBlockMsg ||
+          "Submission is disabled because official requirements for this jurisdiction are not verified."
+      );
       return;
     }
 
@@ -195,12 +220,33 @@ export default function ApplicationPreview({
           </div>
         )}
 
-        {/* 1. Applicant & Extracted Information Snapshot */}
+        {/* Unsupported Jurisdiction Blocker Banner */}
+        {!jurisdictionAllowed && jurisdictionBlockMsg && (
+          <div className="p-4 bg-amber-50 border-2 border-amber-300 text-amber-950 text-xs rounded-2xl flex items-start space-x-3 shadow-xs">
+            <MapPin className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-extrabold uppercase tracking-wide text-amber-900 block">
+                Submission Disabled: Unverified Jurisdiction
+              </span>
+              <p className="leading-relaxed text-amber-900 font-medium">
+                {jurisdictionBlockMsg}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* 1. Applicant & Extracted Information Snapshot (PII MASKED) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
-            <User className="h-4 w-4 text-indigo-600" />
-            <span>Declared Applicant Information</span>
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
+              <User className="h-4 w-4 text-indigo-600" />
+              <span>Declared Applicant Information</span>
+            </h3>
+            <span className="text-[10px] text-slate-400 font-medium flex items-center space-x-1">
+              <Lock className="h-3 w-3 text-slate-400" />
+              <span>Sensitive IDs masked for citizen privacy</span>
+            </span>
+          </div>
 
           {formEntries.length > 0 ? (
             <div className="grid sm:grid-cols-2 gap-3 text-xs">
@@ -209,8 +255,8 @@ export default function ApplicationPreview({
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                     {humanizeKey(key)}
                   </span>
-                  <span className="text-xs font-semibold text-slate-900 block">
-                    {String(value)}
+                  <span className="text-xs font-semibold text-slate-900 block font-mono">
+                    {maskSensitiveValue(key, value)}
                   </span>
                 </div>
               ))}
@@ -283,11 +329,17 @@ export default function ApplicationPreview({
 
           {/* Explicit user action required */}
           <div
-            onClick={() => setConsentAgreed(!consentAgreed)}
-            className="flex items-start space-x-3 p-3 rounded-xl border border-indigo-100 bg-indigo-50/50 cursor-pointer hover:bg-indigo-50 transition"
+            onClick={() => {
+              if (jurisdictionAllowed) setConsentAgreed(!consentAgreed);
+            }}
+            className={`flex items-start space-x-3 p-3 rounded-xl border transition ${
+              !jurisdictionAllowed
+                ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
+                : "border-indigo-100 bg-indigo-50/50 cursor-pointer hover:bg-indigo-50"
+            }`}
           >
             <div className="mt-0.5 shrink-0 text-indigo-600">
-              {consentAgreed ? (
+              {consentAgreed && jurisdictionAllowed ? (
                 <CheckSquare className="h-5 w-5 text-indigo-600" />
               ) : (
                 <Square className="h-5 w-5 text-slate-400" />
@@ -314,8 +366,9 @@ export default function ApplicationPreview({
 
         <button
           onClick={handleApproveAndSubmit}
-          disabled={submitting || !consentAgreed}
+          disabled={submitting || !consentAgreed || !jurisdictionAllowed}
           className="w-full sm:w-auto px-6 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 rounded-xl shadow-xs transition flex items-center justify-center space-x-2 disabled:cursor-not-allowed"
+          title={!jurisdictionAllowed ? "Submission disabled for unverified jurisdiction" : undefined}
         >
           {submitting ? (
             <>

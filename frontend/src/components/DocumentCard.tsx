@@ -1,9 +1,10 @@
 "use client";
 
 import React from "react";
-import { FileText, Calendar } from "lucide-react";
+import { FileText, Calendar, Lock } from "lucide-react";
 import { DocumentVerificationBadge } from "./StatusBadge";
 import { humanizeKey } from "@/lib/statusMapping";
+import { maskSensitiveValue } from "@/lib/masking";
 
 export default function DocumentCard({ doc }: { doc: any }) {
   const isVerified = doc.verification_status === "VERIFIED" || doc.verified === true;
@@ -35,14 +36,20 @@ export default function DocumentCard({ doc }: { doc: any }) {
       <div className="mt-auto space-y-3">
         {doc.extracted_data && isVerified && (
           <div className="bg-slate-50 p-2.5 rounded-xl text-[10px] text-slate-600 border border-slate-100 space-y-1">
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-              Extracted Facts
-            </span>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">
+                Extracted Facts
+              </span>
+              <span className="text-[9px] text-slate-400 flex items-center space-x-0.5">
+                <Lock className="h-2.5 w-2.5" />
+                <span>Masked</span>
+              </span>
+            </div>
             {Object.entries(doc.extracted_data).slice(0, 3).map(([k, v]) => (
               <div key={k} className="flex justify-between">
                 <span className="text-slate-500 font-medium capitalize">{humanizeKey(k)}:</span>
-                <span className="text-slate-900 font-semibold text-right truncate ml-2">
-                  {String(v)}
+                <span className="text-slate-900 font-semibold text-right truncate ml-2 font-mono">
+                  {maskSensitiveValue(k, v)}
                 </span>
               </div>
             ))}

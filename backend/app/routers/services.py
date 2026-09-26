@@ -39,5 +39,12 @@ async def get_service_requirements(
     reqs = await get_requirements(code, jurisdiction=jurisdiction, db=db)
     if not reqs or not reqs.get("service_code"):
         raise HTTPException(status_code=404, detail="Requirements not found for service")
+    if reqs.get("jurisdiction_supported") is False and "jurisdiction_notice" not in reqs:
+        reqs["jurisdiction_notice"] = {
+            "supported": False,
+            "message": reqs.get("error") or f"Official requirements for jurisdiction '{jurisdiction}' are not currently verified in SEVA.",
+            "requested_jurisdiction": reqs.get("requested_jurisdiction", jurisdiction),
+            "supported_jurisdictions": reqs.get("supported_jurisdictions", [])
+        }
     return reqs
 

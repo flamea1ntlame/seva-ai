@@ -32,6 +32,11 @@ import {
 import Link from "next/link";
 import toast from "react-hot-toast";
 import { getApplicationStatusInfo, humanizeKey } from "@/lib/statusMapping";
+import { maskSensitiveValue } from "@/lib/masking";
+import {
+  isJurisdictionSupported,
+  getJurisdictionBlockMessage,
+} from "@/lib/jurisdictionGuard";
 
 export default function ApplicationDetailPage() {
   const params = useParams();
@@ -159,6 +164,16 @@ export default function ApplicationDetailPage() {
   const providedTypes = new Set(providedDocs.map((d: any) => d.document_type.toLowerCase()));
   const missingTypes = requiredTypes.filter((req) => !providedTypes.has(req.toLowerCase()));
 
+  const jurisdictionAllowed = isJurisdictionSupported(
+    requirements?.jurisdiction_notice,
+    requirements?.jurisdiction_supported
+  );
+  const jurisdictionBlockMsg = getJurisdictionBlockMessage(
+    requirements?.jurisdiction_notice,
+    requirements?.jurisdiction_supported,
+    requirements?.requested_jurisdiction || application.service?.jurisdiction
+  );
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-16">
       
@@ -221,11 +236,15 @@ export default function ApplicationDetailPage() {
               </div>
             </div>
 
-            {/* Quick Action button in header if review is ready */}
+            {/* Quick Action button in header if review is ready and jurisdiction is supported */}
             {!isPostSubmission && isReadyForReview && (
               <button
-                onClick={() => setActiveTab("preview")}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow-xs"
+                onClick={() => {
+                  if (jurisdictionAllowed) setActiveTab("preview");
+                }}
+                disabled={!jurisdictionAllowed}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow-xs disabled:cursor-not-allowed"
+                title={!jurisdictionAllowed ? "Submission disabled for unverified jurisdiction" : undefined}
               >
                 <span>Proceed to Review & Consent</span>
                 <Send className="h-3.5 w-3.5" />
@@ -309,14 +328,38 @@ export default function ApplicationDetailPage() {
 
             {!isPostSubmission && (
               <button
-                disabled={!isReadyForReview}
-                onClick={() => setActiveTab("preview")}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 shrink-0"
+                disabled={!isReadyForReview || !jurisdictionAllowed}
+                onClick={() => {
+                  if (jurisdictionAllowed) setActiveTab("preview");
+                }}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 shrink-0 disabled:cursor-not-allowed"
+                title={!jurisdictionAllowed ? "Submission disabled for unverified jurisdiction" : undefined}
               >
-                <span>{isReadyForReview ? "Review & Sign Consent" : "Requirements Incomplete"}</span>
+                <span>
+                  {!jurisdictionAllowed
+                    ? "Disabled (Unverified Jurisdiction)"
+                    : isReadyForReview
+                    ? "Review & Sign Consent"
+                    : "Requirements Incomplete"}
+                </span>
               </button>
             )}
           </div>
+
+          {/* Unsupported Jurisdiction Alert */}
+          {!jurisdictionAllowed && jurisdictionBlockMsg && (
+            <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl text-xs text-amber-950 flex items-start space-x-3 shadow-xs">
+              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-extrabold uppercase tracking-wide text-amber-900 block">
+                  Action Blocked: Unverified Jurisdiction
+                </span>
+                <p className="leading-relaxed font-medium">
+                  {jurisdictionBlockMsg}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Centralized Document Checklist with authoritative rules */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
@@ -334,10 +377,15 @@ export default function ApplicationDetailPage() {
 
           {/* Applicant Data extracted from documents */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
-            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
-              <User className="h-4 w-4 text-indigo-600" />
-              <span>Extracted Applicant Information</span>
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
+                <User className="h-4 w-4 text-indigo-600" />
+                <span>Extracted Applicant Information</span>
+              </h3>
+              <span className="text-[10px] text-slate-400 font-medium">
+                Sensitive identifiers masked for privacy
+              </span>
+            </div>
 
             {application.form_data && Object.keys(application.form_data).length > 0 ? (
               <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -346,8 +394,8 @@ export default function ApplicationDetailPage() {
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                       {humanizeKey(key)}
                     </span>
-                    <span className="text-xs font-semibold text-slate-900 block">
-                      {String(value)}
+                    <span className="text-xs font-semibold text-slate-900 block font-mono">
+                      {maskSensitiveValue(key, value)}
                     </span>
                   </div>
                 ))}

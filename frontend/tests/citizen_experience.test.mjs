@@ -234,3 +234,161 @@ test("7. Chatbot Protocol: Unsupported Jurisdiction & Clarification Contracts", 
   assert.equal(mockChatResponse.clarification_options.length, 2);
   assert.deepEqual(mockChatResponse.missing_documents, ["identity_proof", "income_proof"]);
 });
+
+test("8. BLOCKER 1 — Frontend PII Masking Utility", async (t) => {
+  const { maskAadhaar, maskPan, maskPhoneNumber, maskSensitiveValue } = await import(
+    "../src/lib/masking.ts"
+  );
+
+  await t.test("Aadhaar is masked, leaving only the last 4 digits visible", () => {
+    // Formatted 12 digits
+    const maskedFormatted = maskAadhaar("1234 5678 9012");
+    assert.equal(maskedFormatted, "XXXX XXXX 9012");
+    assert.doesNotMatch(maskedFormatted, /1234/);
+    assert.doesNotMatch(maskedFormatted, /5678/);
+
+    // Unformatted 12 digits
+    const maskedUnformatted = maskAadhaar("123456789012");
+    assert.equal(maskedUnformatted, "XXXX XXXX 9012");
+    assert.doesNotMatch(maskedUnformatted, /12345678/);
+  });
+
+  await t.test("PAN is masked, concealing intermediate sensitive characters", () => {
+    const maskedPan = maskPan("ABCDE1234F");
+    assert.equal(maskedPan, "ABXXXXXX4F");
+    assert.doesNotMatch(maskedPan, /CDE123/);
+  });
+
+  await t.test("Phone number is masked, preserving country code and last 4 digits", () => {
+    const maskedPhone = maskPhoneNumber("9876543210");
+    assert.equal(maskedPhone, "******3210");
+    assert.doesNotMatch(maskedPhone, /987654/);
+
+    const maskedWithCountry = maskPhoneNumber("+91 9876543210");
+    assert.equal(maskedWithCountry, "+91 ******3210");
+    assert.doesNotMatch(maskedWithCountry, /987654/);
+  });
+
+  await t.test("Non-sensitive values remain completely readable and unmasked", () => {
+    assert.equal(maskSensitiveValue("applicant_name", "Ramesh Kumar"), "Ramesh Kumar");
+    assert.equal(maskSensitiveValue("annual_income", 150000), "150000");
+    assert.equal(maskSensitiveValue("occupation", "Private Service"), "Private Service");
+    assert.equal(maskSensitiveValue("address", "123 Main St, Bangalore, KA"), "123 Main St, Bangalore, KA");
+    assert.equal(maskSensitiveValue("dob", "1990-05-15"), "1990-05-15");
+  });
+
+  await t.test("UI rendering path receives masked values for sensitive identity fields", () => {
+    const sampleExtractedData = {
+      aadhaar_number: "9999 8888 1234",
+      pan_number: "XYZPK9876Q",
+      mobile_number: "9876543210",
+      full_name: "Anita Sharma",
+      family_income: "240000"
+    };
+
+    // Simulate the rendering transformation executed by ApplicationPreview and DocumentCard
+    const renderedSnapshot = Object.entries(sampleExtractedData).map(([key, value]) => ({
+      key,
+      renderedDisplay: maskSensitiveValue(key, value)
+    }));
+
+    const aadhaarEntry = renderedSnapshot.find(e => e.key === "aadhaar_number");
+    const panEntry = renderedSnapshot.find(e => e.key === "pan_number");
+    const mobileEntry = renderedSnapshot.find(e => e.key === "mobile_number");
+    const nameEntry = renderedSnapshot.find(e => e.key === "full_name");
+    const incomeEntry = renderedSnapshot.find(e => e.key === "family_income");
+
+    assert.equal(aadhaarEntry?.renderedDisplay, "XXXX XXXX 1234");
+    assert.equal(panEntry?.renderedDisplay, "XYXXXXXX6Q");
+    assert.equal(mobileEntry?.renderedDisplay, "******3210");
+    assert.equal(nameEntry?.renderedDisplay, "Anita Sharma");
+    assert.equal(incomeEntry?.renderedDisplay, "240000");
+  });
+});
+
+test("9. BLOCKER 2 — Centralized Jurisdiction Progression Guard", async (t) => {
+  const { isJurisdictionSupported, getJurisdictionBlockMessage } = await import(
+    "../src/lib/jurisdictionGuard.ts"
+  );
+
+  await t.test("Unsupported jurisdiction disables progression when notice.supported is false", () => {
+    const notice = {
+      supported: false,
+      message: "Official requirements for Kerala are not verified.",
+      requested_jurisdiction: "kerala",
+      supported_jurisdictions: ["Karnataka", "Maharashtra"]
+    };
+
+    const isAllowed = isJurisdictionSupported(notice, true);
+    assert.equal(isAllowed, false);
+
+    const blockMsg = getJurisdictionBlockMessage(notice, true, "kerala");
+    assert.match(blockMsg, /not verified/i);
+  });
+
+  await t.test("Unsupported jurisdiction disables progression when jurisdictionSupportedFlag is false", () => {
+    const isAllowed = isJurisdictionSupported(null, false);
+    assert.equal(isAllowed, false);
+
+    const blockMsg = getJurisdictionBlockMessage(null, false, "Goa");
+    assert.match(blockMsg, /Goa/);
+    assert.match(blockMsg, /disabled/i);
+  });
+
+  await t.test("Supported jurisdiction remains unaffected and allows progression", () => {
+    const supportedNotice = {
+      supported: true,
+      requested_jurisdiction: "karnataka"
+    };
+
+    const isAllowed = isJurisdictionSupported(supportedNotice, true);
+    assert.equal(isAllowed, true);
+
+    const blockMsg = getJurisdictionBlockMessage(supportedNotice, true, "karnataka");
+    assert.equal(blockMsg, null);
+  });
+
+  await t.test("Missing jurisdiction notice does not break normal application flow", () => {
+    assert.equal(isJurisdictionSupported(null, true), true);
+    assert.equal(isJurisdictionSupported(undefined, undefined), true);
+    assert.equal(getJurisdictionBlockMessage(null, true), null);
+  });
+
+  await t.test("Simulated UI guard prevents Start Application when jurisdiction is unsupported", () => {
+    const unsupportedService = {
+      id: "srv-1",
+      code: "income_cert",
+      title: "Income Certificate",
+      jurisdiction_supported: false,
+      jurisdiction_notice: {
+        supported: false,
+        message: "Requirements not verified for Punjab"
+      }
+    };
+
+    // Progression gate condition used in ServiceCatalog
+    const canStartApp = isJurisdictionSupported(
+      unsupportedService.jurisdiction_notice,
+      unsupportedService.jurisdiction_supported
+    );
+    assert.equal(canStartApp, false, "Must block Start Application for unsupported jurisdiction");
+  });
+
+  await t.test("Simulated UI guard blocks application submission when jurisdiction is unsupported", () => {
+    const applicationPreviewState = {
+      consent_id: "con-123",
+      jurisdiction_supported: false,
+      jurisdiction_notice: {
+        supported: false,
+        requested_jurisdiction: "Assam"
+      }
+    };
+
+    const canSubmit = isJurisdictionSupported(
+      applicationPreviewState.jurisdiction_notice,
+      applicationPreviewState.jurisdiction_supported
+    );
+    assert.equal(canSubmit, false, "Must block submission when jurisdiction is unverified");
+  });
+});
+
