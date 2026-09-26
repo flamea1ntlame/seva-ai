@@ -64,10 +64,7 @@ async def run_agent_workflow(
         app_context_str += "\nUse this context to resolve references to 'my application'."
 
     if api_key:
-        try:
-            return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name, app_context_str)
-        except Exception as e:
-            logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
+        return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name, app_context_str)
 
     return await _run_fallback_tool_workflow(message, citizen_id, db, active_apps)
 
@@ -220,7 +217,7 @@ async def _run_gemini_tool_workflow(
         function_responses = []
         for fc in response.function_calls:
             t_name = fc.name
-            t_args = fc.args
+            t_args = fc.args or {}
 
             if t_name in ["create_application", "get_citizen_profile"]:
                 t_args["citizen_id"] = citizen_id
