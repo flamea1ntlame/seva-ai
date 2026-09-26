@@ -132,6 +132,7 @@ async def _run_gemini_tool_workflow(
 ) -> Dict[str, Any]:
     from google import genai
     from google.genai import types
+    from app.agent.prompts import SYSTEM_PROMPT
 
     client = genai.Client(api_key=api_key)
 
