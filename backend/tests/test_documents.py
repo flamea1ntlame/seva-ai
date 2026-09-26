@@ -39,8 +39,8 @@ async def test_document_upload_and_extraction(client: AsyncClient, db_session: A
     upload_res = await client.post("/documents/upload", files=files, data=data, headers=headers)
     assert upload_res.status_code == 200, upload_res.text
     doc_data = upload_res.json()
-    # STATUS SAFETY: Document upload & extraction must result in EXTRACTED, not VERIFIED
-    assert doc_data["verification_status"] == "EXTRACTED"
+    # Verification Engine evaluation: Valid Aadhaar format & Verhoeff, but supporting evidence routes to NEEDS_REVIEW
+    assert doc_data["verification_status"] == "NEEDS_REVIEW"
     assert doc_data["verified"] is False
     assert doc_data["extracted_data"]["name"] == "Rahul Kumar"
     assert doc_data["extracted_data"]["id_number"] == "AADHAAR-8839-2049-1122"

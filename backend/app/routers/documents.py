@@ -231,9 +231,31 @@ async def upload_document(
             # Run extraction engine
             extracted = await extract_document_fields(tmp_path, document_type)
             doc.extracted_data = extracted
-            # STATUS SAFETY: Successful extraction MUST result in EXTRACTED, NOT VERIFIED!
-            doc.verification_status = "EXTRACTED"
-            doc.verified = False
+
+            # -----------------------------------------------------------------
+            # RUN COMPLETE VERIFICATION ENGINE
+            # -----------------------------------------------------------------
+            from app.documents.schemas import ExtractionResult
+            from app.documents.verification.engine import DocumentVerificationEngine
+
+            extraction_contract = ExtractionResult(
+                document_type=document_type,
+                extracted_fields=extracted if isinstance(extracted, dict) else {},
+                raw_text=str(extracted.get("extracted_text") or "") if isinstance(extracted, dict) else None,
+                confidence=float(extracted.get("confidence", 0.95)) if isinstance(extracted, dict) else 0.95
+            )
+
+            verifier = DocumentVerificationEngine()
+            verification_result = await verifier.verify(
+                extraction=extraction_contract,
+                file_path=tmp_path,
+                sha256_hash=sha256_hash
+            )
+
+            # Persist explicit verification status & rich structured evidence
+            doc.verification_status = verification_result.status.value
+            doc.verified = verification_result.is_authentic
+            doc.verification_details = verification_result.model_dump()
 
             await db.commit()
             await db.refresh(doc)
@@ -259,3 +281,79 @@ async def upload_document(
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+@router.get("/documents/{document_id}/verification", response_model=dict)
+@router.get("/api/documents/{document_id}/verification", response_model=dict, include_in_schema=False)
+async def get_document_verification(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves rich verification details and risk flags for a specific document.
+    Enforces tenant ownership.
+    """
+    result = await db.execute(
+        select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied."
+        )
+
+    return {
+        "document_id": str(doc.id),
+        "document_type": doc.document_type,
+        "verification_status": doc.verification_status,
+        "verified": doc.verified,
+        "sha256_hash": doc.sha256_hash,
+        "verification_details": doc.verification_details or {}
+    }
+
+
+@router.post("/documents/{document_id}/reverify", response_model=DocumentRead)
+@router.post("/api/documents/{document_id}/reverify", response_model=DocumentRead, include_in_schema=False)
+async def reverify_document(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reruns the verification decision engine on an existing document record.
+    """
+    result = await db.execute(
+        select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied."
+        )
+
+    from app.documents.schemas import ExtractionResult
+    from app.documents.verification.engine import DocumentVerificationEngine
+
+    extraction_contract = ExtractionResult(
+        document_type=doc.document_type,
+        extracted_fields=doc.extracted_data if isinstance(doc.extracted_data, dict) else {},
+        raw_text=str(doc.extracted_data.get("extracted_text") or "") if isinstance(doc.extracted_data, dict) else None,
+        confidence=0.95
+    )
+
+    verifier = DocumentVerificationEngine()
+    verification_result = await verifier.verify(
+        extraction=extraction_contract,
+        sha256_hash=doc.sha256_hash
+    )
+
+    doc.verification_status = verification_result.status.value
+    doc.verified = verification_result.is_authentic
+    doc.verification_details = verification_result.model_dump()
+
+    await db.commit()
+    await db.refresh(doc)
+    return doc

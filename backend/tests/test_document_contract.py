@@ -108,14 +108,15 @@ async def test_upload_success_is_extracted_not_verified(client: AsyncClient, db_
     assert res.status_code == 200, res.text
     payload = res.json()
 
-    assert payload["verification_status"] == "EXTRACTED"
+    # STATUS SAFETY: Document upload & verification must NOT be VERIFIED without strong evidence
+    assert payload["verification_status"] in ("EXTRACTED", "NEEDS_REVIEW")
     assert payload["verified"] is False
     assert payload["sha256_hash"] == hashlib.sha256(pdf_bytes).hexdigest()
 
     # Check persistence in database
     db_doc = await db_session.get(Document, uuid.UUID(payload["id"]))
     assert db_doc is not None
-    assert db_doc.verification_status == "EXTRACTED"
+    assert db_doc.verification_status in ("EXTRACTED", "NEEDS_REVIEW")
     assert db_doc.verified is False
     assert db_doc.sha256_hash == hashlib.sha256(pdf_bytes).hexdigest()
 

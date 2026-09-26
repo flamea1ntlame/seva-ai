@@ -1,14 +1,34 @@
 from typing import Optional, Dict, Any, List
 from enum import Enum
+from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
 class DocumentVerificationStatus(str, Enum):
+    # Core lifecycle states
+    NOT_CHECKED = "NOT_CHECKED"
     PENDING = "PENDING"
     EXTRACTED = "EXTRACTED"
+    OCR_EXTRACTED = "OCR_EXTRACTED"
+    SIGNATURE_VALID = "SIGNATURE_VALID"
+    ISSUER_VERIFIED = "ISSUER_VERIFIED"
+    REGISTRY_MATCHED = "REGISTRY_MATCHED"
     VERIFIED = "VERIFIED"
-    REJECTED = "REJECTED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
     MANUAL_REVIEW = "MANUAL_REVIEW"
+    SUSPICIOUS = "SUSPICIOUS"
+    NOT_VERIFIABLE = "NOT_VERIFIABLE"
+    REJECTED = "REJECTED"
+
+
+class VerificationMethod(str, Enum):
+    DIGITAL_SIGNATURE = "DIGITAL_SIGNATURE"
+    ISSUER_VERIFICATION = "ISSUER_VERIFICATION"
+    REGISTRY_MATCH = "REGISTRY_MATCH"
+    DIGILOCKER = "DIGILOCKER"
+    QR_ANALYSIS = "QR_ANALYSIS"
+    FORMAT_CHECKSUM = "FORMAT_CHECKSUM"
+    VISUAL_ANALYSIS = "VISUAL_ANALYSIS"
 
 
 class ExtractedField(BaseModel):
@@ -65,15 +85,36 @@ class ExtractionResult(BaseModel):
 
 class DocumentVerificationResult(BaseModel):
     """
-    Strict contract representing the verification state of a document.
+    Strict contract representing the verification state of a document,
+    integrating multi-tier cryptographic, registry, and supporting visual evidence.
     """
     status: DocumentVerificationStatus = Field(
         default=DocumentVerificationStatus.PENDING,
-        description="Strict verification status. Allowed: PENDING, EXTRACTED, VERIFIED, REJECTED, MANUAL_REVIEW."
+        description="Explicit verification state."
     )
     is_authentic: bool = Field(
         default=False,
         description="True ONLY if verified through cryptographic or official issuer/registry evidence."
+    )
+    methods: List[str] = Field(
+        default_factory=list,
+        description="Evidence methods used during verification."
+    )
+    issuer: Optional[str] = Field(
+        default=None,
+        description="Recognized issuing authority (e.g. UIDAI, Income Tax Department, etc.)."
+    )
+    certificate_number: Optional[str] = Field(
+        default=None,
+        description="Redacted document / certificate identifier."
+    )
+    verified_at: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp of verification evaluation."
+    )
+    risk_flags: List[str] = Field(
+        default_factory=list,
+        description="Tamper or anomaly risk flags identified during analysis."
     )
     checks_passed: List[str] = Field(
         default_factory=list,
@@ -90,4 +131,8 @@ class DocumentVerificationResult(BaseModel):
     failure_reason: Optional[str] = Field(
         default=None,
         description="Reason for rejection or escalation to manual review."
+    )
+    details: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Granular evaluation details for officer review."
     )
