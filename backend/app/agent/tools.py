@@ -154,7 +154,7 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
             "service_code": service_code
         }
     
-    rules_data = get_rules_requirements(service.code)
+    rules_data = await get_rules_requirements(service.code, db=db)
     
     return {
         "service_code": service.code,

@@ -181,7 +181,7 @@ class ChatResponse(BaseModel):
     missing_documents: List[str] = []
     verified_documents: List[str] = []
     clarification_options: List[str] = []
-    jurisdiction: Optional[str] = None
+    jurisdiction: Optional[Any] = None
     responsible_officer: Optional[str] = None
 
 

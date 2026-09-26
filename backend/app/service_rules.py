@@ -1,15 +1,152 @@
 """
-SEVA AI - Authoritative Government Service Rules Engine
+SEVA AI - Authoritative Government Service Rules Engine & Protocol
 
-This module serves as the single source of truth for official government service requirements,
+This module provides the protocol and default provider for official government service requirements,
 acceptable alternative documents, document dependencies, responsible authorities, and jurisdiction rules.
 
-CRITICAL RULE:
-Chatbots and LLMs MUST NOT hard-code government requirements into prompt templates.
-Instead, query service_rules.get_requirements(service_code, jurisdiction) and explain the results.
+PERSON 3 DECOUPLING:
+An explicit async protocol `ServiceRulesProvider` is defined below. Person 3 can implement a database-backed
+or external registry provider conforming to this protocol without altering the chatbot orchestrator.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Protocol, runtime_checkable
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@runtime_checkable
+class ServiceRulesProvider(Protocol):
+    """
+    Protocol for authoritative government service rules retrieval.
+    Enables Person 3 to swap this in-memory provider with a database-backed rules engine.
+    """
+    async def get_requirements(
+        self,
+        service_code: str,
+        jurisdiction: Optional[str] = None,
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        ...
+
+    async def evaluate_citizen_readiness(
+        self,
+        service_code: str,
+        uploaded_doc_types: List[str],
+        extracted_fields: Dict[str, Any],
+        jurisdiction: Optional[str] = None,
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        ...
+
+
+# Document Semantic Satisfaction & Alias Rules
+# Legitimate parent identity documents (Voter ID, Aadhaar, Passport) can satisfy 'parent_identity_proof'.
+# A child's identity CANNOT satisfy proof of birth or parent's identity.
+DOCUMENT_SATISFACTION_RULES: Dict[str, Dict[str, Any]] = {
+    "parent_identity_proof": {
+        "description": "Proof of identity of child's father or mother",
+        "category": "PARENT_IDENTITY",
+        "allowed_subtypes": [
+            "parent_identity_proof",
+            "identity_proof",
+            "aadhaar",
+            "aadhaar_card",
+            "voter_id",
+            "passport",
+            "pan_card",
+            "driving_license"
+        ],
+        "prohibited_subtypes": ["child_aadhaar", "child_identity_proof"]
+    },
+    "hospital_certificate": {
+        "description": "Institutional birth notification or discharge summary",
+        "category": "PROOF_OF_BIRTH",
+        "allowed_subtypes": [
+            "hospital_certificate",
+            "birth_notification",
+            "discharge_summary",
+            "institutional_birth_report",
+            "form_1"
+        ],
+        "prohibited_subtypes": ["child_aadhaar", "identity_proof"]
+    },
+    "identity_proof": {
+        "description": "Official government identity proof of the applicant",
+        "category": "APPLICANT_IDENTITY",
+        "allowed_subtypes": [
+            "identity_proof",
+            "aadhaar",
+            "aadhaar_card",
+            "voter_id",
+            "passport",
+            "pan",
+            "pan_card",
+            "driving_license"
+        ],
+        "prohibited_subtypes": []
+    },
+    "address_proof": {
+        "description": "Proof of current residential address",
+        "category": "PROOF_OF_ADDRESS",
+        "allowed_subtypes": [
+            "address_proof",
+            "utility_bill",
+            "electricity_bill",
+            "water_bill",
+            "ration_card",
+            "domicile_certificate",
+            "passport",
+            "bank_passbook"
+        ],
+        "prohibited_subtypes": []
+    },
+    "income_proof": {
+        "description": "Authoritative evidence of annual family earnings",
+        "category": "PROOF_OF_INCOME",
+        "allowed_subtypes": [
+            "income_proof",
+            "salary_slip",
+            "salary_slips",
+            "form_16",
+            "itr",
+            "income_affidavit",
+            "agricultural_assessment",
+            "land_assessment"
+        ],
+        "prohibited_subtypes": []
+    },
+    "photograph": {
+        "description": "Recent passport size photograph of the applicant",
+        "category": "BIOMETRIC_PHOTO",
+        "allowed_subtypes": ["photograph", "photo", "passport_photo"],
+        "prohibited_subtypes": []
+    },
+    "medical_declaration": {
+        "description": "Physical fitness self-declaration or doctor medical certificate",
+        "category": "MEDICAL_FITNESS",
+        "allowed_subtypes": ["medical_declaration", "fitness_certificate", "form_1", "form_1a"],
+        "prohibited_subtypes": []
+    }
+}
+
+
+def is_requirement_satisfied(required_type: str, uploaded_doc_types: List[str]) -> bool:
+    """
+    Checks if any uploaded document satisfies the required type based on
+    semantic document category and legal alias rules.
+    """
+    rule = DOCUMENT_SATISFACTION_RULES.get(required_type)
+    if not rule:
+        return required_type in uploaded_doc_types
+
+    allowed = set(s.lower() for s in rule["allowed_subtypes"])
+    prohibited = set(s.lower() for s in rule["prohibited_subtypes"])
+
+    for uploaded in uploaded_doc_types:
+        u_clean = uploaded.strip().lower()
+        if u_clean in allowed and u_clean not in prohibited:
+            return True
+
+    return False
 
 
 # Structured government service rules database
@@ -57,7 +194,7 @@ SERVICE_RULES: Dict[str, Dict[str, Any]] = {
         ],
         "jurisdictions": {
             "default": {
-                "portal": "State Revenue Citizen Services Portal (e.g. Nadakacheri, MahaOnline, e-District)",
+                "portal": "State Revenue Citizen Services Portal",
                 "validity_period": "1 Year from date of issue"
             },
             "karnataka": {
@@ -180,10 +317,15 @@ SERVICE_RULES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_requirements(service_code: str, jurisdiction: Optional[str] = None) -> Dict[str, Any]:
+async def get_requirements(
+    service_code: str,
+    jurisdiction: Optional[str] = None,
+    db: Optional[AsyncSession] = None
+) -> Dict[str, Any]:
     """
-    Authoritative query interface for government service requirements.
-    Person 2 / Chatbot must query this function rather than hardcoding facts.
+    Authoritative async query interface for government service requirements.
+    Eliminates silent fallback: if an unsupported jurisdiction is requested,
+    it returns jurisdiction_supported=False and does NOT guess another state's rules.
     """
     normalized_code = service_code.strip().lower()
     rules = SERVICE_RULES.get(normalized_code)
@@ -191,16 +333,32 @@ def get_requirements(service_code: str, jurisdiction: Optional[str] = None) -> D
         return {
             "error": f"Service rules for '{service_code}' not found.",
             "service_code": service_code,
+            "jurisdiction_supported": False,
             "required_documents": [],
             "required_fields": []
         }
 
-    # Resolve jurisdiction-specific details if provided
-    jurisdiction_key = (jurisdiction or "default").strip().lower()
-    jurisdiction_data = rules.get("jurisdictions", {}).get(
-        jurisdiction_key,
-        rules.get("jurisdictions", {}).get("default", {})
-    )
+    available_jurisdictions = rules.get("jurisdictions", {})
+    requested_key = jurisdiction.strip().lower() if jurisdiction else "default"
+
+    # Eliminate silent fallback
+    if jurisdiction and requested_key != "default" and requested_key not in available_jurisdictions:
+        supported_states = [k.title() for k in available_jurisdictions.keys() if k != "default"]
+        return {
+            "service_code": rules["service_code"],
+            "service_name": rules["service_name"],
+            "jurisdiction_supported": False,
+            "requested_jurisdiction": jurisdiction,
+            "supported_jurisdictions": supported_states,
+            "error": (
+                f"Official requirements for jurisdiction '{jurisdiction}' are not currently verified in SEVA. "
+                f"Verified jurisdictions for this service are: {', '.join(supported_states) if supported_states else 'National standard'}."
+            ),
+            "required_documents": [],
+            "required_fields": []
+        }
+
+    jurisdiction_data = available_jurisdictions.get(requested_key, available_jurisdictions.get("default", {}))
 
     return {
         "service_code": rules["service_code"],
@@ -208,12 +366,13 @@ def get_requirements(service_code: str, jurisdiction: Optional[str] = None) -> D
         "title": rules["title"],
         "department": rules["department"],
         "description": rules["description"],
+        "jurisdiction_supported": True,
+        "jurisdiction": jurisdiction_data,
         "responsible_authority": rules.get("responsible_authority", {}),
         "required_documents": list(rules["required_documents"]),
         "required_fields": list(rules["required_fields"]),
         "document_options": rules.get("document_options", {}),
         "document_dependencies": rules.get("document_dependencies", []),
-        "jurisdiction": jurisdiction_data,
         "processing_time_days": rules["processing_time_days"],
         "fee_amount": rules["fee_amount"],
         "scholarship_guidance": rules.get("scholarship_guidance")
@@ -230,7 +389,6 @@ def get_alternative_documents(document_type: str, service_code: Optional[str] = 
         if doc_key in options:
             return options[doc_key]
 
-    # Global cross-service fallback
     for s_data in SERVICE_RULES.values():
         options = s_data.get("document_options", {})
         if doc_key in options:
@@ -261,25 +419,32 @@ def get_responsible_officer(service_code: str, jurisdiction: Optional[str] = Non
     }
 
 
-def evaluate_citizen_readiness(
+async def evaluate_citizen_readiness(
     service_code: str,
     uploaded_doc_types: List[str],
     extracted_fields: Dict[str, Any],
-    jurisdiction: Optional[str] = None
+    jurisdiction: Optional[str] = None,
+    db: Optional[AsyncSession] = None
 ) -> Dict[str, Any]:
     """
-    Compares citizen's verified assets against authoritative rules without LLM speculation.
+    Compares citizen's verified assets against authoritative rules.
+    Uses semantic document satisfaction rules (e.g. legitimate parent ID satisfies parent_identity_proof).
     """
-    reqs = get_requirements(service_code, jurisdiction)
-    if "error" in reqs:
+    reqs = await get_requirements(service_code, jurisdiction, db)
+    if "error" in reqs and not reqs.get("jurisdiction_supported", True):
         return reqs
 
-    all_docs = reqs["required_documents"]
-    all_fields = reqs["required_fields"]
+    all_docs = reqs.get("required_documents", [])
+    all_fields = reqs.get("required_fields", [])
 
-    uploaded_set = set(uploaded_doc_types)
-    missing_docs = [d for d in all_docs if d not in uploaded_set]
-    verified_docs = [d for d in all_docs if d in uploaded_set]
+    missing_docs = [
+        d for d in all_docs
+        if not is_requirement_satisfied(d, uploaded_doc_types)
+    ]
+    verified_docs = [
+        d for d in all_docs
+        if is_requirement_satisfied(d, uploaded_doc_types)
+    ]
 
     missing_fields = [f for f in all_fields if f not in extracted_fields or extracted_fields.get(f) in [None, ""]]
     provided_fields = [f for f in all_fields if f not in missing_fields]
@@ -288,7 +453,8 @@ def evaluate_citizen_readiness(
 
     return {
         "service_code": service_code,
-        "service_name": reqs["service_name"],
+        "service_name": reqs.get("service_name", service_code),
+        "jurisdiction_supported": reqs.get("jurisdiction_supported", True),
         "is_ready_for_review": is_ready,
         "required_documents": all_docs,
         "verified_documents": verified_docs,

@@ -14,10 +14,12 @@ from app.service_rules import (
     get_requirements as get_rules_requirements,
     get_alternative_documents,
     get_responsible_officer,
-    evaluate_citizen_readiness
+    evaluate_citizen_readiness,
+    is_requirement_satisfied
 )
 from app.nlp.normalizer import normalize_text, NormalizationResult
 from app.nlp.matcher import match_intent_and_service, Intent, IntentMatchResult
+from app.nlp.pii import mask_pii, sanitize_audit_details
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import (
     TOOLS_SCHEMA,
@@ -40,13 +42,11 @@ async def run_agent_workflow(
 ) -> Dict[str, Any]:
     """
     Orchestrates the AI agent reasoning and tool execution loop.
-    1. Normalizes input (typo correction, spelling, abbreviations) while preserving
-       the verbatim original user message for audit and debugging.
-    2. Identifies intent, service match, and conversational context.
+    1. Normalizes input (typo correction, spelling, abbreviations) without mutating semantics.
+    2. Identifies intent, service match, jurisdiction, and conversational context.
     3. Grounds all government requirements in authoritative service rules.
-    4. Executes with Gemini API with tool use when GEMINI_API_KEY is available,
-       or internal deterministic tool execution engine as fallback.
-    5. Persists ChatMessage and AuditLog for auditability.
+    4. Executes with Gemini API (grounded with pre-retrieved facts) or deterministic engine as fallback.
+    5. Mask PII (Aadhaar, PAN, phone) before persisting to ChatMessage and AuditLog.
     """
     from app.config import settings
     api_key = settings.GEMINI_API_KEY
@@ -69,9 +69,9 @@ async def run_agent_workflow(
             ])
         )
     )
-    active_apps = active_apps_result.scalars().all()
+    active_apps = list(active_apps_result.scalars().all())
 
-    # Step 3: Match intent and service
+    # Step 3: Match intent, service, and jurisdiction
     active_service_codes = [a.service.code for a in active_apps] if active_apps else []
     match_result = match_intent_and_service(
         norm_result,
@@ -96,7 +96,7 @@ async def run_agent_workflow(
     if api_key:
         try:
             result = await _run_gemini_tool_workflow(
-                normalized_message, citizen_id, db, api_key, model_name, app_context_str
+                normalized_message, match_result, citizen_id, db, api_key, model_name, app_context_str
             )
         except Exception as e:
             logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
@@ -122,7 +122,7 @@ async def run_agent_workflow(
     if corrections:
         result["corrections"] = corrections
 
-    # Step 4: Audit & conversation persistence
+    # Step 4: PII-Protected Audit & Conversation Persistence
     try:
         app_uuid = None
         if result.get("application_id"):
@@ -133,13 +133,17 @@ async def run_agent_workflow(
 
         user_uuid = uuid.UUID(citizen_id)
 
-        # Store citizen message with original verbatim text and normalized text
+        # Mask PII (Aadhaar, PAN, phone numbers) before persistence
+        masked_original = mask_pii(original_message)
+        masked_normalized = mask_pii(normalized_message)
+
+        # Store citizen message with PII masked
         citizen_chat = ChatMessage(
             user_id=user_uuid,
             application_id=app_uuid,
             role="user",
-            original_message=original_message,
-            normalized_message=normalized_message,
+            original_message=masked_original,
+            normalized_message=masked_normalized,
             intent=match_result.intent,
             service_code=result.get("service_code") or match_result.service_code,
             corrections=corrections if corrections else None,
@@ -161,7 +165,15 @@ async def run_agent_workflow(
         )
         db.add(ai_chat)
 
-        # Log audit entry preserving original user message for audit/debugging
+        # Log audit entry with sanitized details
+        audit_details = sanitize_audit_details({
+            "original_message": masked_original,
+            "normalized_message": masked_normalized,
+            "corrections": corrections,
+            "intent": match_result.intent,
+            "service_code": result.get("service_code") or match_result.service_code,
+        })
+
         await log_audit_event(
             db=db,
             actor_type="CITIZEN",
@@ -169,13 +181,7 @@ async def run_agent_workflow(
             resource_type="chat",
             user_id=user_uuid,
             resource_id=str(app_uuid) if app_uuid else None,
-            details={
-                "original_message": original_message,
-                "normalized_message": normalized_message,
-                "corrections": corrections,
-                "intent": match_result.intent,
-                "service_code": result.get("service_code") or match_result.service_code,
-            }
+            details=audit_details
         )
         await db.commit()
     except Exception as e:
@@ -236,12 +242,17 @@ async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: As
 
 async def _run_gemini_tool_workflow(
     message: str,
+    match_result: IntentMatchResult,
     citizen_id: str,
     db: AsyncSession,
     api_key: str,
     model_name: str,
     app_context_str: str = ""
 ) -> Dict[str, Any]:
+    """
+    Executes Gemini workflow strictly grounded in deterministically pre-retrieved rules.
+    Prevents the LLM from inventing government document requirements.
+    """
     from google import genai
     from google.genai import types
 
@@ -285,10 +296,35 @@ async def _run_gemini_tool_workflow(
 
     gemini_tool = types.Tool(function_declarations=declarations)
 
+    # Deterministic Pre-Retrieval Grounding
+    target_service_code = match_result.service_code
+    jurisdiction_requested = match_result.entities.get("jurisdiction")
+    grounding_str = ""
+    service_reqs = None
+
+    if target_service_code:
+        rules_info = await get_rules_requirements(target_service_code, jurisdiction=jurisdiction_requested, db=db)
+        if rules_info.get("jurisdiction_supported", True):
+            service_reqs = rules_info
+            grounding_str = (
+                f"\n\nAUTHORITATIVE RULES (Source-Backed, do not alter or add requirements):\n"
+                f"- Service: {rules_info['service_name']} (Department: {rules_info['department']})\n"
+                f"- Required Documents: {rules_info['required_documents']}\n"
+                f"- Required Fields: {rules_info['required_fields']}\n"
+                f"- Dependencies: {rules_info.get('document_dependencies')}\n"
+                f"- Responsible Authority: {rules_info.get('responsible_authority')}\n"
+                f"- Processing Time: {rules_info.get('processing_time_days')} days | Fee: ₹{rules_info.get('fee_amount')}\n"
+            )
+        else:
+            grounding_str = (
+                f"\n\nJURISDICTION NOTICE: Official requirements for requested jurisdiction '{rules_info.get('requested_jurisdiction')}' "
+                f"are NOT verified in SEVA. Inform the user clearly that requirements cannot be verified. Supported: {rules_info.get('supported_jurisdictions')}."
+            )
+
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT + app_context_str,
+        system_instruction=SYSTEM_PROMPT + app_context_str + grounding_str,
         tools=[gemini_tool],
-        temperature=0.2
+        temperature=0.1
     )
 
     messages = [
@@ -296,8 +332,6 @@ async def _run_gemini_tool_workflow(
     ]
 
     created_app_info = None
-    service_reqs = None
-    target_service_code = None
 
     from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
     from google.genai.errors import APIError
@@ -382,10 +416,11 @@ async def _run_fallback_tool_workflow(
 ) -> Dict[str, Any]:
     """
     Deterministic language understanding & service rules grounding engine.
-    Ensures exact compliance without hallucinating requirements.
+    Ensures exact compliance without speculating on government facts.
     """
     text = norm_result.normalized_text.lower().strip()
     target_service_code = match_result.service_code
+    jurisdiction_requested = match_result.entities.get("jurisdiction")
 
     # 1. Filter active apps if user specified explicit SEVA references
     explicit_refs = re.findall(r"\bseva-\d+\b", norm_result.original_text.lower())
@@ -429,7 +464,7 @@ async def _run_fallback_tool_workflow(
     ])
     if is_general_info_query and len(active_apps) == 1 and target_service_code == active_apps[0].service.code:
         app = active_apps[0]
-        reqs = get_rules_requirements(app.service.code)
+        reqs = await get_rules_requirements(app.service.code, jurisdiction=jurisdiction_requested, db=db)
         docs_list = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in reqs["required_documents"]])
         fields_list = "\n".join([f"  • {f.replace('_', ' ').title()}" for f in reqs["required_fields"]])
         reply = (
@@ -489,8 +524,8 @@ async def _run_fallback_tool_workflow(
 
     # 5. Handle "how can i prove my family income" / "where do i get income proof"
     if any(k in text for k in ["prove my family income", "prove family income", "where do i get income proof", "where do i get income"]):
-        rules = get_rules_requirements("income_certificate")
-        income_options = rules["document_options"].get("income_proof", [])
+        rules = await get_rules_requirements("income_certificate", jurisdiction=jurisdiction_requested, db=db)
+        income_options = rules.get("document_options", {}).get("income_proof", [])
         opts_formatted = "\n".join([f"  • **{opt['name']}** (Authority: *{opt['authority']}*)" for opt in income_options])
         authority = rules.get("responsible_authority", {})
         
@@ -510,16 +545,36 @@ async def _run_fallback_tool_workflow(
             "required_fields": rules["required_fields"],
         }
 
-    # 6. Handle "i already uploaded my id" / Document Upload Follow-up
+    # 6. Check for Unsupported Jurisdiction (Eliminating silent fallback)
+    if target_service_code and jurisdiction_requested:
+        rules = await get_rules_requirements(target_service_code, jurisdiction=jurisdiction_requested, db=db)
+        if not rules.get("jurisdiction_supported", True):
+            supported_str = ", ".join(rules.get("supported_jurisdictions", ["Karnataka", "Maharashtra", "Delhi"]))
+            reply = (
+                f"⚠️ **Jurisdiction Notice**: We currently do not have verified official rules for **{jurisdiction_requested.title()}** for this service.\n\n"
+                f"SEVA currently supports verified rules for: **{supported_str}**.\n\n"
+                "Please select a supported state or proceed using national standard requirements."
+            )
+            return {
+                "reply": reply,
+                "application_id": None,
+                "service_code": target_service_code,
+                "status": None,
+                "required_documents": [],
+                "required_fields": [],
+                "jurisdiction": {"supported": False, "requested": jurisdiction_requested}
+            }
+
+    # 7. Handle "i already uploaded my id" / Document Upload Follow-up
     if match_result.intent == Intent.DOCUMENT_UPLOADED_FOLLOWUP:
         profile_data = await _execute_tool("get_citizen_profile", {"citizen_id": citizen_id}, citizen_id, db)
         uploaded_docs = profile_data.get("uploaded_document_types", [])
         
         target_app = active_apps[0] if active_apps else None
         target_code = target_service_code or (target_app.service.code if target_app else "income_certificate")
-        rules = get_rules_requirements(target_code)
+        rules = await get_rules_requirements(target_code, jurisdiction=jurisdiction_requested, db=db)
         
-        missing_docs = [d for d in rules["required_documents"] if d not in uploaded_docs]
+        missing_docs = [d for d in rules["required_documents"] if not is_requirement_satisfied(d, uploaded_docs)]
         verified_items = [d.replace('_', ' ').title() for d in uploaded_docs]
         verified_str = ", ".join(verified_items) if verified_items else "Identity proof"
         
@@ -546,7 +601,7 @@ async def _run_fallback_tool_workflow(
             "required_fields": rules["required_fields"],
         }
 
-    # 7. Handle "what am i missing?"
+    # 8. Handle "what am i missing?"
     if match_result.intent == Intent.CHECK_STATUS_OR_MISSING:
         if active_apps:
             app = active_apps[0]
@@ -554,7 +609,7 @@ async def _run_fallback_tool_workflow(
             merged_profile = profile_data.get("merged_profile", {})
             uploaded_docs = profile_data.get("uploaded_document_types", [])
 
-            readiness = evaluate_citizen_readiness(app.service.code, uploaded_docs, merged_profile)
+            readiness = await evaluate_citizen_readiness(app.service.code, uploaded_docs, merged_profile, jurisdiction=jurisdiction_requested, db=db)
             missing_docs = readiness["missing_documents"]
             missing_fields = readiness["missing_fields"]
 
@@ -576,11 +631,11 @@ async def _run_fallback_tool_workflow(
                 "required_fields": missing_fields,
             }
 
-    # 8. Handle service requirements query (e.g. "what papers do i need", "what documents are required")
+    # 9. Handle service requirements query (e.g. "what papers do i need", "what documents are required")
     if match_result.intent == Intent.CHECK_REQUIREMENTS:
         req_service_code = target_service_code or (active_apps[-1].service.code if active_apps else None)
         if req_service_code:
-            rules = get_rules_requirements(req_service_code)
+            rules = await get_rules_requirements(req_service_code, jurisdiction=jurisdiction_requested, db=db)
             docs_list = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in rules["required_documents"]])
             fields_list = "\n".join([f"  • {f.replace('_', ' ').title()}" for f in rules["required_fields"]])
             
@@ -604,7 +659,7 @@ async def _run_fallback_tool_workflow(
                 "required_fields": rules["required_fields"],
             }
 
-    # 9. Ambiguous intent -> call list_services()
+    # 10. Ambiguous intent -> call list_services()
     if not target_service_code:
         services = (await _execute_tool("list_services", {}, citizen_id, db)).get("services", [])
         titles = ", ".join([f"'{s['title']}' ({s['code']})" for s in services])
@@ -623,9 +678,8 @@ async def _run_fallback_tool_workflow(
             "required_fields": [],
         }
 
-    # 10. Service application / initiation
-    # Fetch authoritative requirements from service_rules
-    rules = get_rules_requirements(target_service_code)
+    # 11. Service application / initiation
+    rules = await get_rules_requirements(target_service_code, jurisdiction=jurisdiction_requested, db=db)
     requirements = await _execute_tool("get_service_requirements", {"service_code": target_service_code}, citizen_id, db)
     if "error" in requirements:
         return {
@@ -644,15 +698,17 @@ async def _run_fallback_tool_workflow(
     all_docs = requirements.get("required_documents", [])
     all_fields = requirements.get("required_fields", [])
 
-    missing_docs = [doc for doc in all_docs if doc not in uploaded_docs]
+    # Check requirement satisfaction with document semantic aliases
+    missing_docs = [doc for doc in all_docs if not is_requirement_satisfied(doc, uploaded_docs)]
     missing_fields = [field for field in all_fields if field not in merged_profile]
 
-    # Create application if not already created
-    if len(active_apps) > 0 and active_apps[0].service.code == target_service_code:
+    # BLOCKER 1 FIX: Search ALL active applications for target service
+    matched_app = next((a for a in active_apps if a.service.code == target_service_code), None)
+    if matched_app:
         app_result = {
-            "application_id": str(active_apps[0].id),
-            "application_number": active_apps[0].application_number,
-            "current_status": active_apps[0].status,
+            "application_id": str(matched_app.id),
+            "application_number": matched_app.application_number,
+            "current_status": matched_app.status,
         }
     else:
         app_result = await _execute_tool("create_application", {"service_code": target_service_code, "citizen_id": citizen_id}, citizen_id, db)
@@ -674,7 +730,6 @@ async def _run_fallback_tool_workflow(
         verified_items = [d.replace('_', ' ').title() for d in uploaded_docs]
         verified_summary = f"\n\n✅ **Verified Data Already in Profile:**\n" + "\n".join([f"  • {item}" for item in verified_items])
 
-    # Contextual note for scholarship
     scholarship_note = ""
     if "scholarship" in text or "scholership" in text:
         scholarship_note = (
@@ -682,7 +737,6 @@ async def _run_fallback_tool_workflow(
             "to verify your family's annual income eligibility ceiling.*\n\n"
         )
 
-    # Contextual note for newborn birth registration
     newborn_note = ""
     if "newborn" in text or "new born" in text or "baby" in text:
         newborn_note = (

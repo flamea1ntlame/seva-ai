@@ -5,8 +5,9 @@ Handles real-world citizen inputs:
 - Spelling mistakes and typo correction ("birth certifcate" -> "birth certificate", "aadahr" -> "Aadhaar",
   "driving lisence" -> "driving licence", "scholership" -> "scholarship", "incom" -> "income")
 - Abbreviations ("cert" -> "certificate", "dl" -> "driving licence", "id" -> "identity proof")
-- Informal language and phonetic misspellings.
-- Keeps original user message stored for audit/debugging.
+- Multilingual Indic phrase normalization (Devanagari & Kannada support).
+- Does NOT mutate verbs/semantics (e.g. 'earning' is NOT mutated to 'income').
+- Preserves native Unicode characters and stores original message untouched.
 """
 
 import re
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 
 # Multi-word phrase replacements (checked first, case-insensitive)
 PHRASE_NORMALIZATIONS = [
+    # English typos & synonyms
     (r"\bbirth\s+certifcate\b", "birth certificate"),
     (r"\bbirth\s+cert\b", "birth certificate"),
     (r"\bbirth\s+cerficate\b", "birth certificate"),
@@ -35,17 +37,30 @@ PHRASE_NORMALIZATIONS = [
     (r"\baavadhi\s+praman\s+patra\b", "income certificate"),
     (r"\baaye\s+praman\s+patra\b", "income certificate"),
     (r"\baay\s+praman\s+patra\b", "income certificate"),
+    
+    # Native Devanagari script normalizations
+    (r"आय\s*प्रमाण\s*पत्र", "income certificate"),
+    (r"आय\s*प्रमाणपत्र", "income certificate"),
+    (r"जन्म\s*प्रमाण\s*पत्र", "birth certificate"),
+    (r"जन्म\s*प्रमाणपत्र", "birth certificate"),
+    (r"ड्राइविंग\s*लाइसेंस", "driving licence"),
+    (r"ड्राइविंग\s*लाइसेन्स", "driving licence"),
+
+    # Native Kannada script normalizations
+    (r"ಆದಾಯ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "income certificate"),
+    (r"ಆದಾಯ\s*ಪ್ರಮಾಣಪತ್ರ", "income certificate"),
+    (r"ಜನನ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ", "birth certificate"),
+    (r"ಜನನ\s*ಪ್ರಮಾಣಪತ್ರ", "birth certificate"),
+    (r"ಚಾಲನಾ\s*ಪರವಾನಗಿ", "driving licence"),
 ]
 
-# Word-level typo and synonym mappings (regex matched on word boundaries)
+# Word-level typo and spelling mappings (strictly genuine typos, NO semantic mutations)
 WORD_NORMALIZATIONS: Dict[str, str] = {
-    # Income & Money
+    # Income spelling errors (strictly typos, 'earning' removed)
     "incom": "income",
     "incme": "income",
     "incm": "income",
     "salery": "salary",
-    "earning": "income",
-    "earnings": "income",
     
     # Certificate variations
     "certifcate": "certificate",
@@ -73,7 +88,6 @@ WORD_NORMALIZATIONS: Dict[str, str] = {
     "adhar": "Aadhaar",
     "aaddhar": "Aadhaar",
     "pancard": "PAN card",
-    "pan": "PAN",
     "voterid": "Voter ID",
     "rationcard": "ration card",
 
@@ -133,8 +147,8 @@ class NormalizationResult:
 
 def normalize_text(text: str) -> NormalizationResult:
     """
-    Normalizes a citizen input string, correcting typos, expanding abbreviations,
-    and tracking every applied transformation for auditing.
+    Normalizes citizen input string, correcting genuine typos and expanding abbreviations.
+    Supports Unicode Indic scripts without discarding non-Latin characters.
     """
     if not text:
         return NormalizationResult(original_text="", normalized_text="", corrections={}, tokens=[])
@@ -143,23 +157,21 @@ def normalize_text(text: str) -> NormalizationResult:
     working_text = text
     corrections: Dict[str, str] = {}
 
-    # Step 1: Phrase replacements
+    # Step 1: Phrase replacements (includes Devanagari & Kannada)
     for pattern, replacement in PHRASE_NORMALIZATIONS:
-        matches = re.findall(pattern, working_text, flags=re.IGNORECASE)
+        matches = re.findall(pattern, working_text, flags=re.IGNORECASE | re.UNICODE)
         if matches:
             for m in matches:
-                if m.lower() != replacement.lower():
+                if m.strip().lower() != replacement.lower():
                     corrections[m.strip()] = replacement
-            working_text = re.sub(pattern, replacement, working_text, flags=re.IGNORECASE)
+            working_text = re.sub(pattern, replacement, working_text, flags=re.IGNORECASE | re.UNICODE)
 
-    # Step 2: Word-level normalization
-    # Tokenize while preserving word structures and SEVA references
-    words = re.findall(r"\b[A-Za-z0-9_-]+\b", working_text)
+    # Step 2: Word-level normalization using Unicode word boundary
+    words = re.findall(r"[\w-]+", working_text, flags=re.UNICODE)
     for word in words:
         w_lower = word.lower()
         if w_lower in WORD_NORMALIZATIONS:
             replacement = WORD_NORMALIZATIONS[w_lower]
-            # Preserve capitalization style if proper noun like Aadhaar / PAN
             if replacement in ["Aadhaar", "PAN", "Voter ID"]:
                 corrected = replacement
             elif word.isupper():
@@ -172,13 +184,12 @@ def normalize_text(text: str) -> NormalizationResult:
             if word != corrected and w_lower != corrected.lower():
                 corrections[word] = corrected
 
-            # Replace using regex boundary
             pattern = rf"\b{re.escape(word)}\b"
-            working_text = re.sub(pattern, corrected, working_text)
+            working_text = re.sub(pattern, corrected, working_text, flags=re.UNICODE)
 
-    # Step 3: Clean up excess whitespace
-    normalized_clean = re.sub(r"\s+", " ", working_text).strip()
-    tokens = [t.lower() for t in re.findall(r"\b[A-Za-z0-9_-]+\b", normalized_clean)]
+    # Step 3: Clean up whitespace while preserving Unicode script characters
+    normalized_clean = re.sub(r"\s+", " ", working_text, flags=re.UNICODE).strip()
+    tokens = [t.lower() for t in re.findall(r"[\w-]+", normalized_clean, flags=re.UNICODE)]
 
     return NormalizationResult(
         original_text=original,

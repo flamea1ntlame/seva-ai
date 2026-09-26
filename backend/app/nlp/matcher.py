@@ -2,7 +2,8 @@
 SEVA AI - Intent Recognition and Service Matching Engine
 
 Classifies citizen intents, maps natural language phrases and domain synonyms to official services,
-extracts entities (application references, document types, jurisdictions), and flags ambiguities.
+extracts entities (application references, document types, jurisdictions), handles contradictory statements,
+and flags ambiguities.
 """
 
 import re
@@ -39,7 +40,7 @@ def match_intent_and_service(
 ) -> IntentMatchResult:
     """
     Analyzes normalized text to identify the citizen's intent, target service code,
-    and associated parameters.
+    and associated parameters. Handles contradictory user messages and extracts jurisdictions.
     """
     text = normalized_result.normalized_text.lower().strip()
     entities: Dict[str, Any] = {}
@@ -49,15 +50,29 @@ def match_intent_and_service(
     if seva_refs:
         entities["application_numbers"] = seva_refs
 
-    # Detect document types mentioned
+    # Detect jurisdiction mentioned
+    known_states = [
+        "karnataka", "maharashtra", "delhi", "kerala", "tamil nadu",
+        "rajasthan", "gujarat", "uttar pradesh", "punjab", "haryana",
+        "west bengal", "andhra pradesh", "telangana", "bihar", "odisha", "assam"
+    ]
+    for state in known_states:
+        if state in text:
+            entities["jurisdiction"] = state
+            break
+
+    # Detect document types mentioned (differentiating parent ID vs applicant ID)
     doc_types = []
-    if "aadhaar" in text or "id proof" in text or "identity" in text or "voter" in text or "pan" in text or "passport" in text or "my id" in text:
+    if "parent" in text and ("aadhaar" in text or "id" in text or "voter" in text or "passport" in text or "pan" in text):
+        doc_types.append("parent_identity_proof")
+    elif any(k in text for k in ["aadhaar", "id proof", "identity", "voter", "pan", "passport", "my id"]):
         doc_types.append("identity_proof")
-    if "address" in text or "utility bill" in text or "electricity bill" in text or "ration card" in text:
+
+    if any(k in text for k in ["address", "utility bill", "electricity bill", "water bill", "ration card", "domicile"]):
         doc_types.append("address_proof")
-    if "income proof" in text or "salary slip" in text or "form 16" in text or "itr" in text or "pay slip" in text:
+    if any(k in text for k in ["income proof", "salary slip", "salary slips", "form 16", "itr", "pay slip", "family income"]):
         doc_types.append("income_proof")
-    if "hospital" in text or "birth report" in text or "discharge summary" in text:
+    if any(k in text for k in ["hospital", "birth report", "discharge summary", "birth notification"]):
         doc_types.append("hospital_certificate")
     if "photo" in text or "photograph" in text:
         doc_types.append("photograph")
@@ -65,47 +80,54 @@ def match_intent_and_service(
         doc_types.append("medical_declaration")
     entities["mentioned_document_types"] = doc_types
 
-    # Service Recognition logic
-    detected_service: Optional[str] = None
-    service_confidence = 0.0
-
-    # 1. Driving License Matching
+    # Service Candidates & Contradiction Resolution
+    # e.g., "actually I don't want income cert, I want driving license instead"
+    services_found = []
+    
+    # Driving License
     if any(k in text for k in [
         "driving licence", "driving license", "driver licence", "driver license",
         "drive vehicle", "drive car", "rto licence", "learner licence", "learning licence"
-    ]):
-        detected_service = "driving_license"
-        service_confidence = 0.95
-    elif "driving" in text or "licence" in text or "license" in text:
-        detected_service = "driving_license"
-        service_confidence = 0.90
+    ]) or "driving" in text or "licence" in text or "license" in text:
+        services_found.append(("driving_license", 0.95))
 
-    # 2. Birth Certificate Matching
-    elif any(k in text for k in [
+    # Birth Certificate
+    if any(k in text for k in [
         "birth certificate", "birth cert", "newborn", "new born",
         "baby birth", "child birth", "born certificate", "janma praman"
-    ]):
-        detected_service = "birth_certificate"
-        service_confidence = 0.95
-    elif "birth" in text and ("child" in text or "baby" in text or "certificate" in text or "register" in text):
-        detected_service = "birth_certificate"
-        service_confidence = 0.90
+    ]) or ("birth" in text and any(k in text for k in ["child", "baby", "certificate", "register"])):
+        services_found.append(("birth_certificate", 0.95))
 
-    # 3. Income Certificate Matching
-    elif any(k in text for k in [
+    # Income Certificate
+    if any(k in text for k in [
         "income certificate", "income cert", "family income", "prove family income",
         "income proof", "salary certificate", "earnings certificate", "revenue certificate"
-    ]):
-        detected_service = "income_certificate"
-        service_confidence = 0.95
-    elif "scholarship" in text or "scholership" in text:
-        # User asking about scholarship documentation / proof
-        detected_service = "income_certificate"
-        service_confidence = 0.85
-        entities["reason"] = "scholarship_eligibility"
-    elif "income" in text:
-        detected_service = "income_certificate"
-        service_confidence = 0.85
+    ]) or "income" in text or "scholarship" in text or "scholership" in text:
+        services_found.append(("income_certificate", 0.90))
+        if "scholarship" in text or "scholership" in text:
+            entities["reason"] = "scholarship_eligibility"
+
+    detected_service: Optional[str] = None
+    service_confidence = 0.0
+
+    if len(services_found) == 1:
+        detected_service, service_confidence = services_found[0]
+    elif len(services_found) > 1:
+        # Check for contradictions or corrections: "not <A>, I want <B>", "instead", "rather"
+        # Find which service comes after contradiction markers like "instead", "want", "actually"
+        corrected_service = None
+        for svc_code, _ in services_found:
+            negation_pattern = rf"(?:not|don\'t want|cancel)\s+(?:an?\s+)?{svc_code.replace('_', ' ')}"
+            if re.search(negation_pattern, text):
+                continue
+            corrected_service = svc_code
+
+        if corrected_service:
+            detected_service = corrected_service
+            service_confidence = 0.92
+        else:
+            # Take the last mentioned service as the recency override
+            detected_service, service_confidence = services_found[-1]
 
     # Intent Classification
 
@@ -162,7 +184,7 @@ def match_intent_and_service(
     # E. Apply for Service (explicit desire to obtain or apply for a service)
     if detected_service and (
         any(k in text for k in ["need", "want", "apply", "get", "issue", "make", "create", "help with", "for my"])
-        or len(text.split()) <= 4  # Short commands like "need income cert", "incom certificate"
+        or len(text.split()) <= 5
     ):
         return IntentMatchResult(
             intent=Intent.APPLY_SERVICE,
@@ -186,7 +208,6 @@ def match_intent_and_service(
             clarification_options=["Income Certificate", "Birth Certificate", "Driving License"]
         )
 
-    # Fallback to detected service or general inquiry
     if detected_service:
         return IntentMatchResult(
             intent=Intent.APPLY_SERVICE,

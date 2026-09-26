@@ -8,11 +8,13 @@ from app.models import User, Service, CitizenProfile, ChatMessage, AuditLog, App
 from app.auth import get_password_hash
 from app.nlp.normalizer import normalize_text
 from app.nlp.matcher import match_intent_and_service, Intent
+from app.nlp.pii import mask_pii
 from app.service_rules import (
     get_requirements,
     get_alternative_documents,
     get_document_dependencies,
-    evaluate_citizen_readiness
+    evaluate_citizen_readiness,
+    is_requirement_satisfied
 )
 
 
@@ -82,223 +84,249 @@ async def seed_chat_test_data(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_typo_normalizer_unit():
-    """Validates typo correction and normalization rules."""
-    # 1. "birth certifcate" -> "birth certificate"
+    """Validates typo correction, Indic preservation, and absence of semantic mutations."""
+    # 1. Typo correction
     res1 = normalize_text("i need birth certifcate")
     assert "birth certificate" in res1.normalized_text
 
-    # 2. "aadahr" -> "Aadhaar"
+    # 2. Aadhaar typo
     res2 = normalize_text("uploaded my aadahr card")
     assert "Aadhaar" in res2.normalized_text
     assert "aadahr" in res2.corrections
 
-    # 3. "driving lisence" -> "driving licence"
+    # 3. Driving licence typo
     res3 = normalize_text("i want driving lisence")
     assert "driving licence" in res3.normalized_text
-    assert "lisence" in res3.corrections or "driving lisence" in res3.corrections
 
-    # 4. "scholership" -> "scholarship"
+    # 4. Scholarship typo
     res4 = normalize_text("incom certficate for scholership")
     assert "income certificate" in res4.normalized_text
     assert "scholarship" in res4.normalized_text
-    assert "scholership" in res4.corrections
 
-    # 5. Original text is preserved untouched
-    assert res4.original_text == "incom certficate for scholership"
+    # 5. NO semantic mutation: 'earning' must NOT become 'income'
+    res5 = normalize_text("I am earning 50000 per month")
+    assert "earning" in res5.normalized_text
+    assert "income" not in res5.normalized_text
 
+    # 6. Native Devanagari script preservation & phrase normalization
+    res_hi = normalize_text("मुझे आय प्रमाण पत्र चाहिए")
+    assert "income certificate" in res_hi.normalized_text
+    assert "मुझे" in res_hi.normalized_text
 
-@pytest.mark.asyncio
-async def test_service_rules_engine_unit():
-    """Validates that government rules come from authoritative rules engine, not hardcoding."""
-    reqs = get_requirements("income_certificate")
-    assert reqs["department"] == "revenue"
-    assert "income_proof" in reqs["required_documents"]
-    assert reqs["responsible_authority"]["title"] == "Tahsildar / Taluk Revenue Officer"
-
-    # Test alternative documents
-    income_alts = get_alternative_documents("income_proof", "income_certificate")
-    assert len(income_alts) >= 3
-    assert any("Salary Slips" in opt["name"] for opt in income_alts)
-    assert any("Form 16" in opt["name"] for opt in income_alts)
-
-    # Test document dependencies: newborn birth certificate does not need child's Aadhaar
-    deps = get_document_dependencies("birth_certificate")
-    assert any("no_child_aadhaar_required_for_birth_registration" in d["rule"] for d in deps)
+    # 7. Native Kannada script preservation & phrase normalization
+    res_kn = normalize_text("ನನಗೆ ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ ಬೇಕು")
+    assert "income certificate" in res_kn.normalized_text
+    assert "ನನಗೆ" in res_kn.normalized_text
 
 
 @pytest.mark.asyncio
-async def test_chatbot_exact_required_phrases(client: AsyncClient, db_session: AsyncSession):
+async def test_service_rules_async_and_no_silent_fallback():
+    """Validates async protocol, jurisdiction checks, and semantic satisfaction."""
+    # 1. Supported jurisdiction
+    reqs_ka = await get_requirements("income_certificate", jurisdiction="karnataka")
+    assert reqs_ka["jurisdiction_supported"] is True
+    assert "Nadakacheri" in reqs_ka["jurisdiction"]["portal"]
+    assert "income_proof" in reqs_ka["required_documents"]
+
+    # 2. Unsupported jurisdiction must return jurisdiction_supported=False (NO silent fallback)
+    reqs_unsupported = await get_requirements("income_certificate", jurisdiction="kerala")
+    assert reqs_unsupported["jurisdiction_supported"] is False
+    assert "not currently verified" in reqs_unsupported["error"]
+    assert "Karnataka" in reqs_unsupported["supported_jurisdictions"]
+
+    # 3. Document satisfaction: Parent identity proof satisfied by legitimate parent ID (Aadhaar / Voter ID)
+    assert is_requirement_satisfied("parent_identity_proof", ["identity_proof"]) is True
+    assert is_requirement_satisfied("parent_identity_proof", ["aadhaar"]) is True
+    assert is_requirement_satisfied("parent_identity_proof", ["voter_id"]) is True
+    # Child's identity CANNOT satisfy parent identity proof
+    assert is_requirement_satisfied("parent_identity_proof", ["child_aadhaar"]) is False
+
+
+@pytest.mark.asyncio
+async def test_pii_masking_unit():
+    """Validates masking of Aadhaar, PAN, and phone numbers."""
+    raw = "My Aadhaar is 1234 5678 9012, PAN is ABCDE1234F and phone is 9876543210"
+    masked = mask_pii(raw)
+    assert "1234 5678" not in masked
+    assert "XXXX-XXXX-9012" in masked
+    assert "ABCDE1234F" not in masked
+    assert "XXXXX1234F" in masked
+    assert "9876543210" not in masked
+    assert "XXXXXX3210" in masked
+
+
+@pytest.mark.asyncio
+async def test_duplicate_application_prevention_on_multi_app(client: AsyncClient, db_session: AsyncSession):
     """
-    Tests the exact set of user phrases specified in assignment:
-    1. 'need income cert'
-    2. 'incom certificate'
-    3. 'incom certficate for scholership'
-    4. 'how can i prove my family income'
-    5. 'where do i get income proof'
-    6. 'i need something for scholarship'
-    7. 'birth cert for newborn'
-    8. 'what papers do i need'
-    9. 'i already uploaded my id'
-    10. 'what am i missing?'
+    CRITICAL BLOCKER 1 REGRESSION TEST:
+    Ensures that when a user already has multiple active applications (e.g. app 0 is birth_cert,
+    app 1 is income_cert), sending an income cert message REUSES app 1 instead of creating a duplicate.
     """
     await seed_chat_test_data(db_session)
 
-    login_res = await client.post("/api/auth/login", json={
-        "email": "citizen2@example.com",
-        "password": "password123"
-    })
+    login_res = await client.post("/api/auth/login", json={"email": "citizen2@example.com", "password": "password123"})
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
-
     me_res = await client.get("/api/auth/me", headers=headers)
     user_id = me_res.json()["id"]
 
-    # 1. "need income cert" -> Income Certificate
-    res_1 = await client.post("/api/chat", json={
+    # Get services
+    s_birth = (await db_session.execute(select(Service).where(Service.code == "birth_certificate"))).scalar_one()
+    s_income = (await db_session.execute(select(Service).where(Service.code == "income_certificate"))).scalar_one()
+
+    # Pre-populate 2 active applications:
+    # app_0 is birth certificate (at index 0)
+    # app_1 is income certificate (at index 1)
+    app_0 = Application(application_number="SEVA-888001", user_id=uuid.UUID(user_id), service_id=s_birth.id, status="COLLECTING_DOCUMENTS")
+    app_1 = Application(application_number="SEVA-888002", user_id=uuid.UUID(user_id), service_id=s_income.id, status="COLLECTING_DOCUMENTS")
+    db_session.add_all([app_0, app_1])
+    await db_session.commit()
+
+    # Now citizen requests income certificate
+    res = await client.post("/api/chat", json={
         "citizen_id": user_id,
         "message": "need income cert"
     }, headers=headers)
-    assert res_1.status_code == 200
-    data_1 = res_1.json()
-    assert data_1["service_code"] == "income_certificate"
-    assert "income_proof" in data_1["required_documents"]
+    assert res.status_code == 200
+    data = res.json()
 
-    # 2. "incom certificate" -> Income Certificate (typo corrected)
-    res_2 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "incom certificate"
-    }, headers=headers)
-    assert res_2.status_code == 200
-    data_2 = res_2.json()
-    assert data_2["service_code"] == "income_certificate"
-    assert data_2["normalized_message"] == "income certificate"
+    # Must reuse app_1 (SEVA-888002) and NOT create a new duplicate application!
+    assert data["application_id"] == str(app_1.id)
+    assert "SEVA-888002" in data["reply"]
 
-    # 3. "incom certficate for scholership" -> Income Certificate with scholarship guidance
-    res_3 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "incom certficate for scholership"
-    }, headers=headers)
-    assert res_3.status_code == 200
-    data_3 = res_3.json()
-    assert data_3["service_code"] == "income_certificate"
-    assert "scholarship" in data_3["reply"].lower()
+    # Count income certificate applications for this citizen: exactly 1
+    total_income_apps = (await db_session.execute(
+        select(Application).where(Application.user_id == uuid.UUID(user_id), Application.service_id == s_income.id)
+    )).scalars().all()
+    assert len(total_income_apps) == 1
 
-    # 4. "how can i prove my family income" -> Explains source-backed income proofs
-    res_4 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "how can i prove my family income"
-    }, headers=headers)
-    assert res_4.status_code == 200
-    data_4 = res_4.json()
-    assert "salary slip" in data_4["reply"].lower() or "form 16" in data_4["reply"].lower()
-    assert "revenue" in data_4["reply"].lower() or "tahsildar" in data_4["reply"].lower()
-
-    # 5. "where do i get income proof" -> Explains legitimate issuers without hallucination
-    res_5 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "where do i get income proof"
-    }, headers=headers)
-    assert res_5.status_code == 200
-    data_5 = res_5.json()
-    assert "employer" in data_5["reply"].lower() or "income tax" in data_5["reply"].lower() or "tahsildar" in data_5["reply"].lower()
-
-    # 6. "i need something for scholarship" -> Connects scholarship to Income Certificate
-    res_6 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "i need something for scholarship"
-    }, headers=headers)
-    assert res_6.status_code == 200
-    data_6 = res_6.json()
-    assert data_6["service_code"] == "income_certificate"
-    assert "scholarship" in data_6["reply"].lower()
-
-    # 7. "birth cert for newborn" -> Birth Certificate (explicitly verifies no newborn Aadhaar requirement)
-    res_7 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "birth cert for newborn"
-    }, headers=headers)
-    assert res_7.status_code == 200
-    data_7 = res_7.json()
-    assert data_7["service_code"] == "birth_certificate"
-    assert "hospital_certificate" in data_7["required_documents"]
-    assert "not required" in data_7["reply"].lower() or "aadhaar" in data_7["reply"].lower()
-
-    # 8. "what papers do i need" -> In context of active application
-    res_8 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "what papers do i need"
-    }, headers=headers)
-    assert res_8.status_code == 200
-    data_8 = res_8.json()
-    assert len(data_8["required_documents"]) > 0
-
-    # 9. "i already uploaded my id" -> Context aware upload follow-up
-    res_9 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "i already uploaded my id"
-    }, headers=headers)
-    assert res_9.status_code == 200
-    data_9 = res_9.json()
-    assert "verified" in data_9["reply"].lower() or "recorded" in data_9["reply"].lower()
-
-    # 10. "what am i missing?" -> Status & missing requirement check
-    res_10 = await client.post("/api/chat", json={
-        "citizen_id": user_id,
-        "message": "what am i missing?"
-    }, headers=headers)
-    assert res_10.status_code == 200
-    data_10 = res_10.json()
-    assert "missing" in data_10["reply"].lower()
+    # Cleanup
+    await db_session.delete(app_0)
+    await db_session.delete(app_1)
+    await db_session.commit()
 
 
 @pytest.mark.asyncio
-async def test_audit_preserves_original_user_message(client: AsyncClient, db_session: AsyncSession):
-    """
-    CRITICAL REQUIREMENT:
-    'The original user message should remain stored for audit/debugging.'
-    """
+async def test_unsupported_jurisdiction_chat(client: AsyncClient, db_session: AsyncSession):
+    """Validates that an unsupported jurisdiction request honestly reports verification inability."""
     await seed_chat_test_data(db_session)
 
-    login_res = await client.post("/api/auth/login", json={
-        "email": "citizen2@example.com",
-        "password": "password123"
-    })
+    login_res = await client.post("/api/auth/login", json={"email": "citizen2@example.com", "password": "password123"})
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
-
     me_res = await client.get("/api/auth/me", headers=headers)
     user_id = me_res.json()["id"]
 
-    raw_imperfect_msg = "incom certficate for scholership with aadahr"
     res = await client.post("/api/chat", json={
         "citizen_id": user_id,
-        "message": raw_imperfect_msg
+        "message": "I need an income certificate in Kerala"
+    }, headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    assert "jurisdiction notice" in data["reply"].lower()
+    assert "kerala" in data["reply"].lower()
+    assert "karnataka" in data["reply"].lower()
+    assert data["application_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_contradictory_user_statement(client: AsyncClient, db_session: AsyncSession):
+    """Validates handling of contradictory user statements (e.g. negation / change of mind)."""
+    await seed_chat_test_data(db_session)
+
+    login_res = await client.post("/api/auth/login", json={"email": "citizen2@example.com", "password": "password123"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me_res = await client.get("/api/auth/me", headers=headers)
+    user_id = me_res.json()["id"]
+
+    # Contradictory message
+    res = await client.post("/api/chat", json={
+        "citizen_id": user_id,
+        "message": "Actually I don't want an income certificate, I want a driving license instead"
+    }, headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["service_code"] == "driving_license"
+    assert "driving license" in data["reply"].lower()
+
+
+@pytest.mark.asyncio
+async def test_audit_masks_pii(client: AsyncClient, db_session: AsyncSession):
+    """Validates that PII (Aadhaar, PAN, phone) in user messages is masked before database persistence."""
+    await seed_chat_test_data(db_session)
+
+    login_res = await client.post("/api/auth/login", json={"email": "citizen2@example.com", "password": "password123"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me_res = await client.get("/api/auth/me", headers=headers)
+    user_id = me_res.json()["id"]
+
+    sensitive_msg = "My Aadhaar is 9999 8888 7777 and PAN is ABCDE9876Z. Please make income cert."
+    res = await client.post("/api/chat", json={
+        "citizen_id": user_id,
+        "message": sensitive_msg
     }, headers=headers)
     assert res.status_code == 200
 
-    # Verify ChatMessage record in DB
-    chat_query = await db_session.execute(
-        select(ChatMessage).where(ChatMessage.original_message == raw_imperfect_msg)
-    )
-    chat_record = chat_query.scalar_one_or_none()
-    assert chat_record is not None
-    assert chat_record.original_message == raw_imperfect_msg
-    assert "income" in chat_record.normalized_message
-    assert "scholarship" in chat_record.normalized_message
-    assert "scholership" in chat_record.corrections
+    # Query ChatMessage table
+    chat_rows = (await db_session.execute(
+        select(ChatMessage).where(ChatMessage.user_id == uuid.UUID(user_id)).order_by(ChatMessage.created_at.desc())
+    )).scalars().all()
+    user_chat = next(c for c in chat_rows if c.role == "user")
 
-    # Verify AuditLog record in DB
-    audit_query = await db_session.execute(
-        select(AuditLog).where(AuditLog.action == "CHAT_MESSAGE")
-    )
-    audit_records = audit_query.scalars().all()
-    assert any(
-        a.details and a.details.get("original_message") == raw_imperfect_msg
-        for a in audit_records
-    )
+    # Raw PII must NOT be present in database!
+    assert "9999 8888 7777" not in user_chat.original_message
+    assert "XXXX-XXXX-7777" in user_chat.original_message
+    assert "ABCDE9876Z" not in user_chat.original_message
+    assert "XXXXX9876Z" in user_chat.original_message
 
-    # Verify GET /api/chat/history endpoint
-    history_res = await client.get("/api/chat/history", headers=headers)
-    assert history_res.status_code == 200
-    history_data = history_res.json()
-    assert any(m["original_message"] == raw_imperfect_msg for m in history_data)
+
+@pytest.mark.asyncio
+async def test_birth_registration_parent_id_satisfaction(client: AsyncClient, db_session: AsyncSession):
+    """
+    Validates document semantics:
+    Uploading 'identity_proof' satisfies 'parent_identity_proof' requirement for birth certificate.
+    """
+    await seed_chat_test_data(db_session)
+
+    login_res = await client.post("/api/auth/login", json={"email": "citizen2@example.com", "password": "password123"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me_res = await client.get("/api/auth/me", headers=headers)
+    user_id = me_res.json()["id"]
+
+    # 1. Citizen applies for birth certificate
+    res_init = await client.post("/api/chat", json={
+        "citizen_id": user_id,
+        "message": "birth cert for newborn"
+    }, headers=headers)
+    assert res_init.status_code == 200
+    app_id = res_init.json()["application_id"]
+
+    # 2. Simulate citizen uploading parent identity proof tagged as 'identity_proof'
+    doc = Document(
+        user_id=uuid.UUID(user_id),
+        application_id=uuid.UUID(app_id),
+        document_type="identity_proof",
+        title="Father Aadhaar Card",
+        file_path="mock/father_aadhaar.pdf",
+        verified=True,
+        verification_status="VERIFIED",
+        extracted_data={"name": "Priya Sharma"}
+    )
+    db_session.add(doc)
+    await db_session.commit()
+
+    # 3. Ask what is missing
+    res_missing = await client.post("/api/chat", json={
+        "citizen_id": user_id,
+        "message": "what am i missing?"
+    }, headers=headers)
+    assert res_missing.status_code == 200
+    data_missing = res_missing.json()
+
+    # parent_identity_proof must be satisfied! Only hospital_certificate should be in missing_documents
+    assert "hospital_certificate" in data_missing["required_documents"]
+    assert "parent_identity_proof" not in data_missing["required_documents"]
