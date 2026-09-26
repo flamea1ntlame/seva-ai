@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useEventContext } from "@/contexts/EventContext";
+import { getApiBaseUrl } from "@/lib/api";
 import toast from "react-hot-toast";
 
 export default function SSEListener() {
@@ -9,25 +10,30 @@ export default function SSEListener() {
 
   useEffect(() => {
     // Only connect if there's a token
-    const token = localStorage.getItem("token");
+    const rawToken = typeof window !== "undefined" ? localStorage.getItem("seva_token") : null;
+    const token =
+      rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
+        ? rawToken.trim()
+        : null;
     if (!token) return;
 
-    // Use EventSource (Note: native EventSource does not support custom headers natively in all browsers)
-    // To send the token, we can pass it as a query param, but the backend requires Bearer token.
-    // Wait, the backend uses Depends(get_current_user) which uses OAuth2PasswordBearer.
-    // Let me check if we can pass it as a query param `?token=...` or if we have to use a polyfill.
-    // If we use standard fetch, we can stream the response manually. Let's do that for better compatibility with Bearer tokens.
-    
+    // Use EventSource / manual fetch streaming with Bearer token
     const controller = new AbortController();
     
     const connectToStream = async () => {
       try {
-        const response = await fetch("/api/events/stream", {
+        const baseUrl = getApiBaseUrl();
+        const response = await fetch(`${baseUrl}/api/events/stream`, {
           headers: {
             "Authorization": `Bearer ${token}`
           },
           signal: controller.signal
         });
+
+        if (response.status === 401 || response.status === 403) {
+          // Token is invalid/expired or forbidden; do not loop reconnect
+          return;
+        }
 
         if (!response.body) return;
         

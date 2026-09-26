@@ -8,6 +8,7 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
   const originalEnv = process.env.NEXT_PUBLIC_API_URL;
   const originalWindow = globalThis.window;
   const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
   const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 
   function setMockNavigator(mockObj) {
@@ -30,6 +31,7 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
     process.env.NEXT_PUBLIC_API_URL = originalEnv;
     globalThis.window = originalWindow;
     globalThis.fetch = originalFetch;
+    globalThis.localStorage = originalLocalStorage;
     restoreNavigator();
   });
 
@@ -308,5 +310,342 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
       resolveBackendUrl({ SEVA_BACKEND_URL: "https://seva-ai-2hks.onrender.com" }),
       "https://seva-ai-2hks.onrender.com"
     );
+  });
+
+  await t.test("20. Authentication lifecycle: successful login -> /me success -> dashboard allowed", async () => {
+    const storage = new Map();
+    let eventDispatched = false;
+    let navigatedTo = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    globalThis.fetch = async (url, options) => {
+      if (url.includes("/api/auth/login")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: "jwt_token_123", token_type: "bearer" }),
+        };
+      }
+      if (url.includes("/api/auth/me")) {
+        assert.equal(options.headers["Authorization"], "Bearer jwt_token_123");
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cit-1", email: "citizen@example.com", full_name: "Citizen One" }),
+        };
+      }
+      throw new Error(`Unexpected request to ${url}`);
+    };
+
+    // Simulate login flow
+    const loginData = await fetchApi("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: "citizen@example.com", password: "secretpassword" }),
+    });
+    globalThis.localStorage.setItem("seva_token", loginData.access_token);
+
+    const verifiedUser = await fetchApi("/api/auth/me");
+    assert.ok(verifiedUser);
+    assert.equal(verifiedUser.id, "cit-1");
+    navigatedTo = "/dashboard";
+
+    assert.equal(navigatedTo, "/dashboard");
+    assert.equal(globalThis.localStorage.getItem("seva_token"), "jwt_token_123");
+    assert.equal(eventDispatched, false);
+  });
+
+  await t.test("21. Authentication lifecycle: login succeeds but /me returns 401 -> stay on login with clear error", async () => {
+    const storage = new Map();
+    let eventDispatched = false;
+    let navigatedTo = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    globalThis.fetch = async (url) => {
+      if (url.includes("/api/auth/login")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: "invalid_jwt_token", token_type: "bearer" }),
+        };
+      }
+      if (url.includes("/api/auth/me")) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ detail: "Could not validate credentials" }),
+        };
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    };
+
+    // Simulate login with bad token returned
+    const loginData = await fetchApi("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: "citizen@example.com", password: "password" }),
+    });
+    globalThis.localStorage.setItem("seva_token", loginData.access_token);
+
+    // /me fails with 401
+    await assert.rejects(
+      async () => {
+        try {
+          await fetchApi("/api/auth/me");
+          navigatedTo = "/dashboard";
+        } catch (err) {
+          // AuthContext refreshUser pattern
+          globalThis.localStorage.removeItem("seva_token");
+          throw err;
+        }
+      },
+      (err) => {
+        assert.equal(err.status, 401);
+        return true;
+      }
+    );
+
+    // Verify citizen did NOT navigate to dashboard and credentials were reset
+    assert.equal(navigatedTo, null);
+    assert.equal(globalThis.localStorage.getItem("seva_token"), null);
+    assert.equal(eventDispatched, true);
+  });
+
+  await t.test("22. Authentication lifecycle: background endpoint 401 does not destroy session or clear seva_token", async () => {
+    const storage = new Map([["seva_token", "valid_active_token"]]);
+    let eventDispatched = false;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    // Background requests (vault-stats, chat history, applications)
+    const backgroundEndpoints = [
+      "/api/documents/vault-stats",
+      "/api/chat/history",
+      "/api/applications/",
+    ];
+
+    for (const endpoint of backgroundEndpoints) {
+      globalThis.fetch = async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ detail: "Not authenticated for this resource" }),
+      });
+
+      await assert.rejects(
+        async () => {
+          await fetchApi(endpoint);
+        },
+        (err) => {
+          assert.equal(err.status, 401);
+          assert.match(err.message, /Not authenticated/i);
+          return true;
+        }
+      );
+
+      // Session must remain intact!
+      assert.equal(globalThis.localStorage.getItem("seva_token"), "valid_active_token");
+      assert.equal(eventDispatched, false);
+    }
+  });
+
+  await t.test("23. Authentication lifecycle: expired token on /api/auth/me triggers seva:session_expired and clears seva_token", async () => {
+    const storage = new Map([["seva_token", "expired_token"]]);
+    let eventDispatched = false;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: "Could not validate credentials" }),
+    });
+
+    await assert.rejects(
+      async () => {
+        await fetchApi("/api/auth/me");
+      },
+      (err) => {
+        assert.equal(err.status, 401);
+        assert.match(err.message, /session has expired/i);
+        return true;
+      }
+    );
+
+    assert.equal(globalThis.localStorage.getItem("seva_token"), null);
+    assert.equal(eventDispatched, true);
+  });
+
+  await t.test("24. Authentication lifecycle: network failure during refreshUser preserves token without false session expiry", async () => {
+    const storage = new Map([["seva_token", "valid_citizen_token"]]);
+    let eventDispatched = false;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    // Network drops / connection refused
+    globalThis.fetch = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+
+    await assert.rejects(
+      async () => {
+        try {
+          await fetchApi("/api/auth/me");
+        } catch (err) {
+          // AuthContext handles non-401 without wiping token
+          if (err?.status === 401) {
+            globalThis.localStorage.removeItem("seva_token");
+          }
+          throw err;
+        }
+      },
+      (err) => {
+        assert.equal(err.errorType, "NETWORK");
+        return true;
+      }
+    );
+
+    // Token must be preserved!
+    assert.equal(globalThis.localStorage.getItem("seva_token"), "valid_citizen_token");
+    assert.equal(eventDispatched, false);
+  });
+
+  await t.test("25. Token key consistency: seva_token used consistently, malformed strings rejected", async () => {
+    let capturedHeader = null;
+
+    globalThis.window = {
+      location: { hostname: "localhost" },
+    };
+
+    globalThis.fetch = async (url, options) => {
+      capturedHeader = options.headers?.["Authorization"] ?? null;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "ok" }),
+      };
+    };
+
+    // Test 1: Valid token
+    globalThis.localStorage = {
+      getItem: (k) => (k === "seva_token" ? "clean_jwt_xyz" : null),
+    };
+    await fetchApi("/api/services/");
+    assert.equal(capturedHeader, "Bearer clean_jwt_xyz");
+
+    // Test 2: Malformed tokens "null" or "undefined" should NOT attach Authorization
+    for (const badToken of ["null", "undefined", "  ", ""]) {
+      globalThis.localStorage = {
+        getItem: (k) => (k === "seva_token" ? badToken : null),
+      };
+      capturedHeader = null;
+      await fetchApi("/api/services/");
+      assert.equal(capturedHeader, null, `Token value '${badToken}' should not attach Authorization header`);
+    }
+  });
+
+  await t.test("26. Login credential failure: 401 on /api/auth/login does not dispatch seva:session_expired", async () => {
+    let eventDispatched = false;
+
+    globalThis.localStorage = {
+      getItem: () => null,
+      removeItem: () => {},
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      dispatchEvent: (event) => {
+        if (event.type === "seva:session_expired") eventDispatched = true;
+        return true;
+      },
+      location: { hostname: "localhost" },
+    };
+
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: "Incorrect email or password" }),
+    });
+
+    await assert.rejects(
+      async () => {
+        await fetchApi("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email: "citizen@example.com", password: "wrong" }),
+        });
+      },
+      (err) => {
+        assert.equal(err.status, 401);
+        assert.equal(err.message, "Incorrect email or password");
+        return true;
+      }
+    );
+
+    // Must NOT trigger session expired event on login failure
+    assert.equal(eventDispatched, false);
   });
 });

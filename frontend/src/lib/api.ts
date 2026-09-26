@@ -60,9 +60,13 @@ export function getApiBaseUrl(): string {
 }
 
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
-  const token =
+  const rawToken =
     typeof window !== "undefined" && typeof localStorage !== "undefined"
       ? localStorage.getItem("seva_token")
+      : null;
+  const token =
+    rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
+      ? rawToken.trim()
       : null;
   const baseUrl = getApiBaseUrl();
   const targetUrl = `${baseUrl}${endpoint}`;
@@ -84,15 +88,58 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     });
 
     if (response.status === 401) {
-      if (typeof window !== "undefined") {
-        if (typeof localStorage !== "undefined") {
-          localStorage.removeItem("seva_token");
-        }
-        if (typeof window.dispatchEvent === "function") {
-          window.dispatchEvent(new CustomEvent("seva:session_expired"));
-        }
+      let errorData: any = {};
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = {};
       }
-      throw new ApiError("Your session has expired. Please sign in again.", 401, "CLIENT_ERROR", endpoint);
+
+      const serverMsg =
+        typeof errorData.detail === "string"
+          ? errorData.detail
+          : Array.isArray(errorData.detail)
+          ? errorData.detail.map((e: any) => e.msg || e.message || JSON.stringify(e)).join(", ")
+          : errorData.message || null;
+
+      const isLoginOrSignup =
+        endpoint.includes("/auth/login") || endpoint.includes("/auth/signup");
+      const isAuthVerification =
+        endpoint.endsWith("/auth/me") || endpoint.includes("/auth/me");
+
+      if (isAuthVerification) {
+        if (typeof window !== "undefined") {
+          if (typeof localStorage !== "undefined") {
+            localStorage.removeItem("seva_token");
+          }
+          if (typeof window.dispatchEvent === "function") {
+            window.dispatchEvent(new CustomEvent("seva:session_expired"));
+          }
+        }
+        throw new ApiError(
+          "Your session has expired. Please sign in again.",
+          401,
+          "CLIENT_ERROR",
+          endpoint
+        );
+      }
+
+      if (isLoginOrSignup) {
+        throw new ApiError(
+          serverMsg || "Incorrect email or password.",
+          401,
+          "CLIENT_ERROR",
+          endpoint
+        );
+      }
+
+      // For arbitrary background/data endpoints, preserve error and do NOT destroy the session
+      throw new ApiError(
+        serverMsg || "Unauthorized access.",
+        401,
+        "CLIENT_ERROR",
+        endpoint
+      );
     }
 
     if (!response.ok) {
