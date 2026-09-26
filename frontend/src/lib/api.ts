@@ -52,6 +52,10 @@ export function getApiBaseUrl(): string {
     }
   }
 
+  if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") {
+    return "https://seva-ai-2hks.onrender.com";
+  }
+
   return "http://localhost:8000";
 }
 

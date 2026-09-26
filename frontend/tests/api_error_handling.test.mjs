@@ -272,27 +272,20 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
     );
   });
 
-  await t.test("16. resolveBackendUrl throws explicit error in production when backend URL is missing", () => {
-    assert.throws(
-      () => resolveBackendUrl({ NODE_ENV: "production" }),
-      (err) => {
-        assert.match(err.message, /SEVA API CONFIG ERROR/i);
-        assert.match(err.message, /Missing backend API URL in production/i);
-        assert.match(err.message, /must not target localhost/i);
-        return true;
-      }
-    );
+  await t.test("16. resolveBackendUrl falls back to https://seva-ai-2hks.onrender.com in production when env is missing (never localhost)", () => {
+    const url = resolveBackendUrl({ NODE_ENV: "production" });
+    assert.equal(url, "https://seva-ai-2hks.onrender.com");
+    assert.notEqual(url, "http://localhost:8000");
   });
 
-  await t.test("17. resolveBackendUrl throws explicit error in Vercel preview/production when backend URL is missing", () => {
-    assert.throws(
-      () => resolveBackendUrl({ VERCEL: "1", VERCEL_ENV: "preview" }),
-      (err) => {
-        assert.match(err.message, /SEVA API CONFIG ERROR/i);
-        assert.match(err.message, /must not target localhost/i);
-        return true;
-      }
-    );
+  await t.test("17. resolveBackendUrl falls back to https://seva-ai-2hks.onrender.com in Vercel when env is missing (never localhost)", () => {
+    const previewUrl = resolveBackendUrl({ VERCEL: "1", VERCEL_ENV: "preview" });
+    assert.equal(previewUrl, "https://seva-ai-2hks.onrender.com");
+    assert.notEqual(previewUrl, "http://localhost:8000");
+
+    const prodUrl = resolveBackendUrl({ VERCEL: "1", VERCEL_ENV: "production" });
+    assert.equal(prodUrl, "https://seva-ai-2hks.onrender.com");
+    assert.notEqual(prodUrl, "http://localhost:8000");
   });
 
   await t.test("18. resolveBackendUrl handles key whitespace, lowercase casing, and surrounding quotes", () => {
