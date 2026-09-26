@@ -35,7 +35,11 @@ export class ApiError extends Error {
 export function getApiBaseUrl(): string {
   const envUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   if (envUrl) {
-    return envUrl.replace(/\/+$/, "");
+    let cleaned = envUrl.replace(/\/+$/, "");
+    if (cleaned.endsWith("/api")) {
+      cleaned = cleaned.slice(0, -4);
+    }
+    return cleaned;
   }
 
   if (typeof window !== "undefined") {

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ApiError, getApiBaseUrl, fetchApi } from "../src/lib/api.ts";
+import backendConfig from "../src/lib/backendConfig.js";
+const { resolveBackendUrl } = backendConfig;
 
 test("API Error Handling & Base URL Regression Suite", async (t) => {
   const originalEnv = process.env.NEXT_PUBLIC_API_URL;
@@ -217,6 +219,77 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
         assert.equal(err.status, 0);
         assert.equal(err.errorType, "TIMEOUT");
         assert.match(err.message, /Request timed out/i);
+        return true;
+      }
+    );
+  });
+
+  await t.test("12. getApiBaseUrl strips redundant /api and trailing slashes", () => {
+    process.env.NEXT_PUBLIC_API_URL = "https://seva-ai-2hks.onrender.com/api/";
+    assert.equal(getApiBaseUrl(), "https://seva-ai-2hks.onrender.com");
+
+    process.env.NEXT_PUBLIC_API_URL = "https://seva-ai-2hks.onrender.com/api";
+    assert.equal(getApiBaseUrl(), "https://seva-ai-2hks.onrender.com");
+
+    process.env.NEXT_PUBLIC_API_URL = "https://seva-ai-2hks.onrender.com///";
+    assert.equal(getApiBaseUrl(), "https://seva-ai-2hks.onrender.com");
+  });
+
+  await t.test("13. resolveBackendUrl normalizes NEXT_PUBLIC_API_URL without /api or trailing slash", () => {
+    assert.equal(
+      resolveBackendUrl({ NEXT_PUBLIC_API_URL: "https://seva-ai-2hks.onrender.com/api/" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+    assert.equal(
+      resolveBackendUrl({ NEXT_PUBLIC_API_URL: "https://seva-ai-2hks.onrender.com" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+  });
+
+  await t.test("14. resolveBackendUrl supports server environment variables (BACKEND_URL, API_URL, RENDER_EXTERNAL_URL)", () => {
+    assert.equal(
+      resolveBackendUrl({ BACKEND_URL: "https://seva-backend.internal:8000" }),
+      "https://seva-backend.internal:8000"
+    );
+    assert.equal(
+      resolveBackendUrl({ API_URL: "https://seva-api.internal/api/" }),
+      "https://seva-api.internal"
+    );
+    assert.equal(
+      resolveBackendUrl({ RENDER_EXTERNAL_URL: "https://seva-ai-2hks.onrender.com" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+  });
+
+  await t.test("15. resolveBackendUrl falls back to http://localhost:8000 only in local development", () => {
+    assert.equal(
+      resolveBackendUrl({ NODE_ENV: "development" }),
+      "http://localhost:8000"
+    );
+    assert.equal(
+      resolveBackendUrl({}),
+      "http://localhost:8000"
+    );
+  });
+
+  await t.test("16. resolveBackendUrl throws explicit error in production when backend URL is missing", () => {
+    assert.throws(
+      () => resolveBackendUrl({ NODE_ENV: "production" }),
+      (err) => {
+        assert.match(err.message, /SEVA API CONFIG ERROR/i);
+        assert.match(err.message, /Missing backend API URL in production/i);
+        assert.match(err.message, /must not target localhost/i);
+        return true;
+      }
+    );
+  });
+
+  await t.test("17. resolveBackendUrl throws explicit error in Vercel preview/production when backend URL is missing", () => {
+    assert.throws(
+      () => resolveBackendUrl({ VERCEL: "1", VERCEL_ENV: "preview" }),
+      (err) => {
+        assert.match(err.message, /SEVA API CONFIG ERROR/i);
+        assert.match(err.message, /must not target localhost/i);
         return true;
       }
     );
