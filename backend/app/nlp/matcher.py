@@ -168,22 +168,27 @@ def match_intent_and_service(
         "already uploaded", "i uploaded", "uploaded my", "i have uploaded",
         "check my document", "check my docs", "uploaded id", "already submitted my"
     ]):
+        resolved_service = detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None)
         return IntentMatchResult(
             intent=Intent.DOCUMENT_UPLOADED_FOLLOWUP,
-            service_code=detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None),
+            service_code=resolved_service,
             confidence=0.90,
             entities=entities
         )
 
-    # C. Missing requirements / Status check ("what am i missing?", "what is pending?", "what do i still need?")
+    # C. Missing requirements / Status check ("what am i missing?", "what is pending?", "check my application status")
     if any(k in text for k in [
         "what am i missing", "what is missing", "what am i still missing",
         "what is pending", "what do i still need", "missing docs", "missing documents",
-        "status of my application", "how is my application going"
+        "status of my application", "how is my application going",
+        "check my application status", "check application status", "check my status",
+        "check status", "application status", "what is my status", "what is the status",
+        "my application status", "check application", "track my application"
     ]):
+        resolved_service = detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None)
         return IntentMatchResult(
             intent=Intent.CHECK_STATUS_OR_MISSING,
-            service_code=detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None),
+            service_code=resolved_service,
             confidence=0.92,
             entities=entities
         )
@@ -194,9 +199,10 @@ def match_intent_and_service(
         "which papers do i need", "what proof is needed", "how can i prove",
         "where do i get", "how to prove", "requirements for"
     ]) or (("what" in text or "which" in text) and ("documents" in text or "papers" in text or "proof" in text)):
+        resolved_service = detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None)
         return IntentMatchResult(
             intent=Intent.CHECK_REQUIREMENTS,
-            service_code=detected_service or (active_service_codes[0] if active_service_codes and len(active_service_codes) == 1 else None),
+            service_code=resolved_service,
             confidence=0.90,
             entities=entities
         )

@@ -30,7 +30,8 @@ async def chat_endpoint(
     result = await run_agent_workflow(
         message=chat_in.message,
         citizen_id=str(current_user.id),
-        db=db
+        db=db,
+        application_id=str(chat_in.application_id) if chat_in.application_id else None
     )
 
     return ChatResponse(

@@ -222,12 +222,17 @@ export default function ChatAssistant({
     setLoading(true);
 
     try {
+      const payload: Record<string, any> = {
+        citizen_id: user.id,
+        message: trimmed,
+      };
+      if (currentAppId) {
+        payload.application_id = currentAppId;
+      }
+
       const data = await fetchApi("/api/chat", {
         method: "POST",
-        body: JSON.stringify({
-          citizen_id: user.id,
-          message: trimmed,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (data.application_id) {

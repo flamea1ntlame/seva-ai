@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 async def run_agent_workflow(
     message: str,
     citizen_id: str,
-    db: AsyncSession
+    db: AsyncSession,
+    application_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Orchestrates the AI agent reasoning and tool execution loop.
@@ -67,17 +68,45 @@ async def run_agent_workflow(
                 "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
                 "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
             ])
-        )
+        ).order_by(Application.created_at.desc())
     )
     active_apps = list(active_apps_result.scalars().all())
 
-    # Step 2b: Fetch recent conversation history for LLM context
+    # Step 2b: If specific application_id passed, validate ownership and isolate context
+    target_app = None
+    if application_id:
+        try:
+            target_uuid = uuid.UUID(str(application_id))
+            target_app = next((a for a in active_apps if a.id == target_uuid), None)
+            if not target_app:
+                explicit_app_res = await db.execute(
+                    select(Application).options(selectinload(Application.service)).where(
+                        Application.id == target_uuid,
+                        Application.user_id == uuid.UUID(citizen_id)
+                    )
+                )
+                target_app = explicit_app_res.scalar_one_or_none()
+            if target_app:
+                active_apps = [target_app]
+        except (ValueError, TypeError):
+            pass
+
+    # Step 2c: Fetch recent conversation history for LLM context and context recovery
     history_result = await db.execute(
         select(ChatMessage).where(
             ChatMessage.user_id == uuid.UUID(citizen_id)
         ).order_by(ChatMessage.created_at.desc()).limit(6)
     )
     chat_history = list(reversed(history_result.scalars().all()))
+
+    # If no explicit application_id, recover context from recent chat history
+    if not target_app and active_apps:
+        for ch in reversed(chat_history):
+            if ch.application_id:
+                matched_hist_app = next((a for a in active_apps if a.id == ch.application_id), None)
+                if matched_hist_app:
+                    active_apps = [matched_hist_app] + [a for a in active_apps if a.id != matched_hist_app.id]
+                    break
 
     # Step 3: Match intent, service, and jurisdiction
     active_service_codes = [a.service.code for a in active_apps] if active_apps else []
@@ -86,6 +115,10 @@ async def run_agent_workflow(
         has_active_apps=bool(active_apps),
         active_service_codes=active_service_codes
     )
+
+    # If no service detected in message but citizen has a single unambiguous active application, preserve its service code
+    if not match_result.service_code and len(active_apps) == 1:
+        match_result.service_code = active_apps[0].service.code
 
     app_context_str = ""
     if active_apps:
@@ -709,6 +742,16 @@ async def _run_fallback_tool_workflow(
                 "jurisdiction": jurisdiction_requested,
                 "jurisdiction_notice": None,
             }
+        else:
+            return {
+                "reply": "You do not currently have any active applications. Would you like to explore available services?",
+                "application_id": None,
+                "service_code": None,
+                "status": None,
+                "required_documents": [],
+                "required_fields": [],
+                "clarification_options": ["Income Certificate", "Birth Certificate", "Driving License"]
+            }
 
     # 9. Handle service requirements query (e.g. "what papers do i need", "what documents are required")
     if match_result.intent == Intent.CHECK_REQUIREMENTS:
@@ -740,24 +783,40 @@ async def _run_fallback_tool_workflow(
                 "jurisdiction_notice": None,
             }
 
-    # 10. Ambiguous intent -> call list_services()
+    # 10. Ambiguous intent -> check active applications before calling list_services()
     if not target_service_code:
-        services = (await _execute_tool("list_services", {}, citizen_id, db)).get("services", [])
-        titles = ", ".join([f"'{s['title']}' ({s['code']})" for s in services])
-        reply = (
-            "We offer several official government services on the SEVA AI platform, including: "
-            f"{titles}.\n\n"
-            "Could you please specify which service you would like to apply for? "
-            "(For example: 'I need an Income Certificate', 'I want a Birth Certificate', or 'I need a Driving License')."
-        )
-        return {
-            "reply": reply,
-            "application_id": None,
-            "service_code": None,
-            "status": None,
-            "required_documents": [],
-            "required_fields": [],
-        }
+        if active_apps:
+            if len(active_apps) == 1:
+                target_service_code = active_apps[0].service.code
+            else:
+                titles = ", ".join([f"{a.service.title} ({a.application_number})" for a in active_apps])
+                return {
+                    "reply": f"You have multiple active applications: {titles}. Could you please specify which application you would like to proceed with?",
+                    "application_id": None,
+                    "service_code": None,
+                    "status": None,
+                    "required_documents": [],
+                    "required_fields": [],
+                    "clarification_options": [a.service.title for a in active_apps]
+                }
+        else:
+            services = (await _execute_tool("list_services", {}, citizen_id, db)).get("services", [])
+            titles = ", ".join([f"'{s['title']}' ({s['code']})" for s in services])
+            reply = (
+                "We offer several official government services on the SEVA AI platform, including: "
+                f"{titles}.\n\n"
+                "Could you please specify which service you would like to apply for? "
+                "(For example: 'I need an Income Certificate', 'I want a Birth Certificate', or 'I need a Driving License')."
+            )
+            return {
+                "reply": reply,
+                "application_id": None,
+                "service_code": None,
+                "status": None,
+                "required_documents": [],
+                "required_fields": [],
+                "clarification_options": [s["title"] for s in services[:3]]
+            }
 
     # 11. Service application / initiation
     rules = await get_rules_requirements(target_service_code, jurisdiction=jurisdiction_requested, db=db)

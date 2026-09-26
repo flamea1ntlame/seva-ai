@@ -167,6 +167,7 @@ class ConsentRespond(BaseModel):
 class ChatRequest(BaseModel):
     citizen_id: uuid.UUID
     message: str
+    application_id: Optional[uuid.UUID] = None
 
 
 class ChatResponse(BaseModel):

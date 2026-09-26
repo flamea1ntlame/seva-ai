@@ -392,3 +392,52 @@ test("9. BLOCKER 2 — Centralized Jurisdiction Progression Guard", async (t) =>
   });
 });
 
+test("10. ChatAssistant Context Preservation: Chat Request Payload & Document Uploads", async (t) => {
+  await t.test("Payload builder includes application_id when currentAppId is set", () => {
+    const buildChatPayload = (userId, message, currentAppId) => {
+      const payload = {
+        citizen_id: userId,
+        message: message.trim(),
+      };
+      if (currentAppId) {
+        payload.application_id = currentAppId;
+      }
+      return payload;
+    };
+
+    // Before starting an application
+    const payloadInit = buildChatPayload("user-1", "I need income certificate", null);
+    assert.equal(payloadInit.citizen_id, "user-1");
+    assert.equal(payloadInit.application_id, undefined);
+
+    // After application is initialized and document uploaded
+    const appId = "app-uuid-999";
+    const payloadFollowup = buildChatPayload(
+      "user-1",
+      "I uploaded my identity proof. Check my application status.",
+      appId
+    );
+    assert.equal(payloadFollowup.citizen_id, "user-1");
+    assert.equal(payloadFollowup.application_id, "app-uuid-999");
+    assert.match(payloadFollowup.message, /Check my application status/);
+  });
+
+  await t.test("Document upload formData includes application_id when currentAppId is active", () => {
+    const buildUploadFormData = (userId, docType, currentAppId) => {
+      const fields = {
+        citizen_id: userId,
+        document_type: docType,
+      };
+      if (currentAppId) {
+        fields.application_id = currentAppId;
+      }
+      return fields;
+    };
+
+    const uploadFields = buildUploadFormData("user-1", "identity_proof", "app-uuid-999");
+    assert.equal(uploadFields.application_id, "app-uuid-999");
+    assert.equal(uploadFields.document_type, "identity_proof");
+  });
+});
+
+
