@@ -517,6 +517,8 @@ async def _run_fallback_tool_workflow(
             "status": app.status,
             "required_documents": reqs["required_documents"],
             "required_fields": reqs["required_fields"],
+            "jurisdiction": jurisdiction_requested,
+            "jurisdiction_notice": None,
         }
 
     # 3. Disambiguate multiple active apps when submitting/preparing
@@ -672,6 +674,8 @@ async def _run_fallback_tool_workflow(
             "status": target_app.status if target_app else "COLLECTING_DOCUMENTS",
             "required_documents": missing_docs,
             "required_fields": rules["required_fields"],
+            "jurisdiction": jurisdiction_requested,
+            "jurisdiction_notice": None,
         }
 
     # 8. Handle "what am i missing?"
@@ -702,6 +706,8 @@ async def _run_fallback_tool_workflow(
                 "status": app.status,
                 "required_documents": missing_docs,
                 "required_fields": missing_fields,
+                "jurisdiction": jurisdiction_requested,
+                "jurisdiction_notice": None,
             }
 
     # 9. Handle service requirements query (e.g. "what papers do i need", "what documents are required")
@@ -730,6 +736,8 @@ async def _run_fallback_tool_workflow(
                 "status": matched_app.status if matched_app else None,
                 "required_documents": rules["required_documents"],
                 "required_fields": rules["required_fields"],
+                "jurisdiction": jurisdiction_requested,
+                "jurisdiction_notice": None,
             }
 
     # 10. Ambiguous intent -> call list_services()
@@ -839,4 +847,6 @@ async def _run_fallback_tool_workflow(
         "status": app_result["current_status"],
         "required_documents": missing_docs,
         "required_fields": missing_fields,
+        "jurisdiction": jurisdiction_requested,
+        "jurisdiction_notice": None,
     }

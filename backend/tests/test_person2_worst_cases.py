@@ -395,6 +395,74 @@ async def test_case_jurisdiction_stability_and_types(jurisdiction_input: str, is
         assert data["jurisdiction_notice"] is None or data["jurisdiction_notice"].get("supported") is True
 
 
+@pytest.mark.parametrize("prepositional_msg", [
+    "I need a certificate in person",
+    "I need a certificate in advance",
+    "I need a certificate in English",
+])
+@pytest.mark.asyncio
+async def test_case_negative_prepositional_phrases_not_jurisdictions(prepositional_msg: str, client: AsyncClient, db_session: AsyncSession):
+    """
+    CRITICAL REGRESSION TEST:
+    Ensures ordinary prepositional phrases ('in person', 'in advance', 'in English')
+    are NOT erroneously parsed as jurisdictions.
+    """
+    users = await seed_worst_case_data(db_session)
+    user = users["worst_citizen1@example.com"]
+    headers = await get_user_headers(client, user.email)
+
+    res = await client.post("/api/chat", json={
+        "citizen_id": str(user.id),
+        "message": prepositional_msg
+    }, headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    # Must NOT classify "person", "advance", or "english" as jurisdiction
+    assert data["jurisdiction"] not in ["person", "advance", "english"]
+    # jurisdiction_notice must not claim "person", "advance", or "english" is an unsupported jurisdiction
+    assert data["jurisdiction_notice"] is None
+
+
+@pytest.mark.parametrize("geo_msg, expected_jurisdiction, is_supported", [
+    ("I need an income certificate in the state of Karnataka", "karnataka", True),
+    ("I need an income certificate in state Karnataka", "karnataka", True),
+    ("I need an income certificate for state Karnataka", "karnataka", True),
+    ("I need an income certificate in jurisdiction Karnataka", "karnataka", True),
+    ("I need an income certificate in the state of Atlantis", "atlantis", False),
+    ("I need an income certificate in state Atlantis", "atlantis", False),
+    ("I need an income certificate for state Atlantis", "atlantis", False),
+    ("I need an income certificate in jurisdiction Atlantis", "atlantis", False),
+    ("I need an income certificate in Kerala", "kerala", False),
+    ("I need an income certificate in Maharashtra", "maharashtra", True),
+    ("I need an income certificate in Delhi", "delhi", True),
+])
+@pytest.mark.asyncio
+async def test_case_explicit_geographic_jurisdiction_forms(geo_msg: str, expected_jurisdiction: str, is_supported: bool, client: AsyncClient, db_session: AsyncSession):
+    """
+    Validates explicit geographic forms ('in the state of X', 'in state X', 'for state X', 'in jurisdiction X')
+    and known Indian states.
+    """
+    users = await seed_worst_case_data(db_session)
+    user = users["worst_citizen1@example.com"]
+    headers = await get_user_headers(client, user.email)
+
+    res = await client.post("/api/chat", json={
+        "citizen_id": str(user.id),
+        "message": geo_msg
+    }, headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["jurisdiction"] == expected_jurisdiction
+    if not is_supported:
+        assert data["jurisdiction_notice"] is not None
+        assert data["jurisdiction_notice"]["supported"] is False
+        assert data["required_documents"] == []
+    else:
+        assert data["jurisdiction_notice"] is None or data["jurisdiction_notice"].get("supported") is True
+
+
 # ==============================================================================
 # SECTION 6: DOCUMENT SEMANTIC COMPATIBILITY ATTACKS
 # ==============================================================================

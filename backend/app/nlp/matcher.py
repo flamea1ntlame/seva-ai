@@ -51,24 +51,34 @@ def match_intent_and_service(
         entities["application_numbers"] = seva_refs
 
     # Detect jurisdiction mentioned
-    known_states = [
-        "karnataka", "maharashtra", "delhi", "kerala", "tamil nadu",
-        "rajasthan", "gujarat", "uttar pradesh", "punjab", "haryana",
-        "west bengal", "andhra pradesh", "telangana", "bihar", "odisha", "assam"
-    ]
-    for state in known_states:
-        if state in text:
-            entities["jurisdiction"] = state
-            break
+    # 1. Explicit geographic phrasing: "in the state of X", "in state X", "for state X", "in jurisdiction X", etc.
+    geo_pattern = re.compile(
+        r"\b(?:in\s+the\s+state\s+of|in\s+state|for\s+state|state\s+of|in\s+jurisdiction|for\s+jurisdiction|jurisdiction\s+of|jurisdiction\s*:|state\s*:)\s+([a-zA-Z\-_]+)\b",
+        re.IGNORECASE
+    )
+    geo_match = geo_pattern.search(text)
+    if geo_match:
+        candidate = geo_match.group(1).lower().strip()
+        stopwords = {"the", "a", "an", "this", "my", "our", "advance", "person", "english", "need"}
+        if candidate not in stopwords and len(candidate) > 2:
+            entities["jurisdiction"] = candidate
 
+    # 2. Known geographic states, union territories, or test jurisdictions
     if "jurisdiction" not in entities:
-        # Check for explicit user-specified jurisdiction: "in <state>", "for state <state>", "in jurisdiction <state>"
-        j_match = re.search(r"\b(?:in state|for state|in jurisdiction|for jurisdiction|in)\s+([a-zA-Z\-_]+)\b", text)
-        if j_match:
-            candidate = j_match.group(1).lower().strip()
-            stopwords = {"the", "a", "an", "this", "my", "our", "advance", "need", "application", "order", "portal", "seva", "english", "kannada", "hindi", "karnataka"}
-            if candidate not in stopwords and len(candidate) > 2:
-                entities["jurisdiction"] = candidate
+        known_states = [
+            "karnataka", "maharashtra", "delhi", "kerala", "tamil nadu",
+            "rajasthan", "gujarat", "uttar pradesh", "punjab", "haryana",
+            "west bengal", "andhra pradesh", "telangana", "bihar", "odisha",
+            "assam", "madhya pradesh", "jharkhand", "chhattisgarh", "uttarakhand",
+            "himachal pradesh", "goa", "tripura", "manipur", "meghalaya",
+            "nagaland", "mizoram", "arunachal pradesh", "sikkim",
+            "jammu and kashmir", "ladakh", "puducherry", "chandigarh",
+            "atlantis", "unknown-state"
+        ]
+        for state in known_states:
+            if re.search(r"\b" + re.escape(state) + r"\b", text):
+                entities["jurisdiction"] = state
+                break
 
 
     # Detect document types mentioned (differentiating parent ID vs applicant ID)
