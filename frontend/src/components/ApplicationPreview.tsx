@@ -69,6 +69,8 @@ export default function ApplicationPreview({
     : null;
 
   const handleApproveAndSubmit = async () => {
+    if (submitting || submissionComplete) return;
+
     if (!consentAgreed) {
       setError("Please check the declaration box to authorize submission.");
       return;

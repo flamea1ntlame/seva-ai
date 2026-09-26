@@ -77,6 +77,7 @@ export default function ChatAssistant({
   const [currentAppId, setCurrentAppId] = useState<string | null>(initialApplicationId || null);
   const [showConsentPreview, setShowConsentPreview] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const currentUserIdRef = useRef<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +88,24 @@ export default function ChatAssistant({
   useEffect(() => {
     scrollToBottom();
   }, [messages, agentActivity, uploadedDocs, uploading]);
+
+  // Reset state whenever user identity changes to prevent cross-citizen data leaks
+  useEffect(() => {
+    if (!user) {
+      setMessages([]);
+      setCurrentAppId(null);
+      setHistoryLoaded(false);
+      currentUserIdRef.current = null;
+      return;
+    }
+
+    if (currentUserIdRef.current !== user.id) {
+      currentUserIdRef.current = user.id;
+      setMessages([]);
+      setCurrentAppId(initialApplicationId || null);
+      setHistoryLoaded(false);
+    }
+  }, [user, initialApplicationId]);
 
   // Load chat history from backend if available to preserve conversational context
   useEffect(() => {

@@ -78,13 +78,76 @@ export function maskPhoneNumber(value: string): string {
 }
 
 /**
+ * Mask any sensitive PII embedded inside longer strings (free text, notes, remarks).
+ */
+export function maskEmbeddedPII(text: string): string {
+  if (!text || typeof text !== "string") return text;
+
+  // 1. Aadhaar with space or hyphen: e.g. "1234 5678 9012" or "1234-5678-9012"
+  let masked = text.replace(/\b\d{4}[\s-]\d{4}[\s-](\d{4})\b/g, "XXXX XXXX $1");
+
+  // 2. 12-digit continuous Aadhaar: e.g. "123456789012"
+  masked = masked.replace(/\b\d{8}(\d{4})\b/g, "XXXX XXXX $1");
+
+  // 3. Indian PAN: e.g. "ABCDE1234F" -> "ABXXXXXX4F"
+  masked = masked.replace(/\b([A-Za-z]{2})[A-Za-z]{3}\d{3}(\d[A-Za-z])\b/g, (match, p1, p2) => {
+    return `${p1.toUpperCase()}XXXXXX${p2.toUpperCase()}`;
+  });
+
+  // 4. Indian Phone (+91 or 10-digit starting with 6-9)
+  masked = masked.replace(/\b(\+91[\s-]?)?[6-9]\d{5}(\d{4})\b/g, (match, prefix, last4) => {
+    const p = prefix ? "+91 " : "";
+    return `${p}******${last4}`;
+  });
+
+  return masked;
+}
+
+/**
+ * Recursively masks sensitive fields inside an object or array.
+ */
+export function maskSensitiveObject(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== "object") {
+    return maskEmbeddedPII(String(obj));
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => maskSensitiveObject(item));
+  }
+
+  const result: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const normK = k.toLowerCase();
+    if (typeof v === "object" && v !== null) {
+      result[k] = maskSensitiveObject(v);
+    } else if (normK.includes("aadhaar") || normK.includes("aadhar") || normK.includes("uid")) {
+      result[k] = maskAadhaar(String(v));
+    } else if (normK.includes("pan")) {
+      result[k] = maskPan(String(v));
+    } else if (normK.includes("phone") || normK.includes("mobile") || normK.includes("contact")) {
+      result[k] = maskPhoneNumber(String(v));
+    } else {
+      result[k] = maskEmbeddedPII(String(v));
+    }
+  }
+  return result;
+}
+
+/**
  * General presentation masking helper.
- * Inspects key names and/or value patterns to mask sensitive identifiers,
+ * Inspects key names, object structures, and value patterns to mask sensitive identifiers,
  * preserving all non-sensitive text (names, dates, amounts, addresses) intact.
  */
 export function maskSensitiveValue(key: string, value: any): string {
   if (value === null || value === undefined) return "";
-  const strVal = typeof value === "object" ? JSON.stringify(value) : String(value);
+  
+  if (typeof value === "object") {
+    const maskedObj = maskSensitiveObject(value);
+    return JSON.stringify(maskedObj);
+  }
+
+  const strVal = String(value);
   if (!strVal.trim()) return "";
 
   const normKey = (key || "").toLowerCase();
@@ -102,7 +165,7 @@ export function maskSensitiveValue(key: string, value: any): string {
     return maskPhoneNumber(strVal);
   }
 
-  // 2. Value pattern detection (for generic keys like "id_number", "document_number", "val")
+  // 2. Exact Value pattern detection (for generic keys like "id_number", "document_number", "val")
   const cleanedDigits = strVal.replace(/[\s-]/g, "");
   if (/^\d{12}$/.test(cleanedDigits)) {
     return maskAadhaar(strVal);
@@ -116,6 +179,7 @@ export function maskSensitiveValue(key: string, value: any): string {
     return maskPhoneNumber(strVal);
   }
 
-  // Non-sensitive values remain completely readable
-  return strVal;
+  // 3. Embedded PII in longer strings (e.g. "Citizen Aadhaar is 1234 5678 9012")
+  return maskEmbeddedPII(strVal);
 }
+

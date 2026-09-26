@@ -52,6 +52,8 @@ function LoginFormContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || authLoading) return;
+
     setError("");
     setSessionExpiredNotice(false);
 

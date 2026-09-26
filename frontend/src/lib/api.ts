@@ -46,7 +46,12 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
       throw new ApiError(errorMsg, response.status);
     }
 
-    return response.json();
+    try {
+      return await response.json();
+    } catch {
+      // Handles empty 200 responses or non-JSON payloads safely
+      return null;
+    }
   } catch (err: any) {
     if (err instanceof ApiError) {
       throw err;

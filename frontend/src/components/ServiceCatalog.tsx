@@ -119,16 +119,28 @@ export default function ServiceCatalog({
   };
 
   const handleStartApplication = async (service: ServiceItem) => {
-    if (selectedService?.id === service.id && serviceRequirements) {
+    if (startingApp) return;
+
+    // Verify jurisdiction support (using cached requirements or fetching fresh)
+    let reqs = (selectedService?.id === service.id) ? serviceRequirements : null;
+    if (!reqs) {
+      try {
+        reqs = await fetchApi(`/api/services/${service.code}/requirements`);
+      } catch {
+        // If backend requirements fetch fails, proceed with cautious validation
+      }
+    }
+
+    if (reqs) {
       const allowed = isJurisdictionSupported(
-        serviceRequirements.jurisdiction_notice,
-        serviceRequirements.jurisdiction_supported
+        reqs.jurisdiction_notice,
+        reqs.jurisdiction_supported
       );
       if (!allowed) {
         const msg = getJurisdictionBlockMessage(
-          serviceRequirements.jurisdiction_notice,
-          serviceRequirements.jurisdiction_supported,
-          serviceRequirements.jurisdiction
+          reqs.jurisdiction_notice,
+          reqs.jurisdiction_supported,
+          reqs.jurisdiction
         );
         setError(msg || "Official requirements for this jurisdiction are not verified in SEVA. Application creation is disabled.");
         return;
@@ -141,6 +153,7 @@ export default function ServiceCatalog({
     }
 
     setStartingApp(true);
+    setError(null);
     try {
       const app = await fetchApi("/api/applications/", {
         method: "POST",

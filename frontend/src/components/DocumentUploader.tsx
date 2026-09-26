@@ -84,7 +84,16 @@ export default function DocumentUploader({
     // Avoid duplicate rapid submission
     if (isUploading) return;
 
-    // Check size limit: 10MB max
+    // Check size limit: cannot be empty (0 bytes) and must not exceed 10MB
+    if (file.size === 0) {
+      setStage({
+        step: "error",
+        fileName: file.name,
+        errorMessage: "File is empty (0 bytes). Please upload a valid document.",
+      });
+      return;
+    }
+
     if (file.size > 10 * 1024 * 1024) {
       setStage({
         step: "error",
@@ -94,7 +103,7 @@ export default function DocumentUploader({
       return;
     }
 
-    // Supported formats
+    // Supported extensions
     const validExtensions = [".pdf", ".jpg", ".jpeg", ".png"];
     const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
     if (!hasValidExt) {
@@ -106,10 +115,25 @@ export default function DocumentUploader({
       return;
     }
 
+    // Strict MIME type verification (blocks SVG, executable, and spoofed files)
+    const allowedMimeTypes = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
+    if (file.type && !allowedMimeTypes.includes(file.type.toLowerCase())) {
+      setStage({
+        step: "error",
+        fileName: file.name,
+        errorMessage: "Unsupported format. Only PDF, JPG, and PNG files are accepted. SVG and executable formats are prohibited.",
+      });
+      return;
+    }
+
+    const sanitizedFileName = (file.name || "document")
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+      .slice(0, 120);
+
     setLastUploadedFile(file);
     setStage({
       step: "uploading",
-      fileName: file.name,
+      fileName: sanitizedFileName,
       fileSize: file.size,
       documentType: selectedType,
     });
