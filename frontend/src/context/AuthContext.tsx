@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
@@ -30,9 +30,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true);
   const router = useRouter();
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     setLoading(true);
-    const token = localStorage.getItem("seva_token");
+    const token = typeof window !== "undefined" ? localStorage.getItem("seva_token") : null;
     if (!token) {
       setUser(null);
       setLoading(false);
@@ -42,28 +42,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const userData = await fetchApi("/api/auth/me");
       setUser(userData);
-    } catch (err) {
-      console.error("Failed to fetch current user:", err);
-      localStorage.removeItem("seva_token");
+    } catch {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("seva_token");
+      }
       setUser(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     refreshUser();
-  }, []);
+
+    // Listen to session expired event from fetchApi
+    const handleExpired = () => {
+      setUser(null);
+      router.push("/login?session_expired=1");
+    };
+
+    window.addEventListener("seva:session_expired", handleExpired);
+    return () => {
+      window.removeEventListener("seva:session_expired", handleExpired);
+    };
+  }, [refreshUser, router]);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
     try {
       const data = await fetchApi("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
 
-      localStorage.setItem("seva_token", data.access_token);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("seva_token", data.access_token);
+      }
       await refreshUser();
       router.push("/dashboard");
     } catch (err) {
@@ -73,17 +87,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signup = async (full_name: string, email: string, password: string, phone_number?: string) => {
-    await fetchApi("/api/auth/signup", {
-      method: "POST",
-      body: JSON.stringify({ full_name, email, password, phone_number }),
-    });
+    setLoading(true);
+    try {
+      await fetchApi("/api/auth/signup", {
+        method: "POST",
+        body: JSON.stringify({
+          full_name: full_name.trim(),
+          email: email.trim(),
+          password,
+          phone_number: phone_number?.trim() || null,
+        }),
+      });
 
-    // Auto login after signup
-    await login(email, password);
+      // Auto login after signup
+      await login(email, password);
+    } catch (err) {
+      setLoading(false);
+      throw err;
+    }
   };
 
   const logout = () => {
-    localStorage.removeItem("seva_token");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("seva_token");
+    }
     setUser(null);
     router.push("/login");
   };

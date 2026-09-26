@@ -1,75 +1,102 @@
+"use client";
+
 import React from "react";
-import { Clock, CheckCircle2, AlertCircle, RefreshCw, AlertTriangle, Send } from "lucide-react";
+import {
+  Clock,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  AlertTriangle,
+  Send,
+  FileCheck2,
+  HelpCircle,
+} from "lucide-react";
+import {
+  getApplicationStatusInfo,
+  getDocumentStatusInfo,
+} from "@/lib/statusMapping";
 
 export function getStatusConfig(status: string, government_status?: string) {
-  // If government status exists and SEVA status is SUBMITTED, TRACKING, or COMPLETED, prioritize government status
-  const effectiveStatus = government_status || status;
+  const info = getApplicationStatusInfo(status, government_status);
 
-  switch (effectiveStatus) {
-    case "COMPLETED":
-    case "APPROVED":
-    case "VERIFIED":
-      return {
-        color: "bg-success-50 text-success-700 border-success-200",
-        icon: <CheckCircle2 className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
-      };
-    case "REJECTED":
-      return {
-        color: "bg-error-50 text-error-700 border-error-200",
-        icon: <AlertCircle className="h-3 w-3" />,
-        label: "REJECTED",
-      };
-    case "MISSING_INFORMATION":
-    case "CONSENT_REQUIRED":
-    case "ACTION_REQUIRED":
-      return {
-        color: "bg-warning-50 text-warning-800 border-warning-200",
-        icon: <AlertTriangle className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
-      };
-    case "SUBMITTING":
-    case "SUBMITTED":
-      return {
-        color: "bg-primary-50 text-primary-700 border-primary-200",
-        icon: <Send className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
-      };
-    case "UNDER_REVIEW":
-    case "TRACKING":
-    case "EXTRACTING":
-    case "VALIDATING":
-      return {
-        color: "bg-brand-100 text-brand-700 border-brand-200",
-        icon: <RefreshCw className="h-3 w-3 animate-spin" />,
-        label: effectiveStatus.replace("_", " "),
-      };
-    default:
-      return {
-        color: "bg-brand-50 text-brand-600 border-brand-200",
-        icon: <Clock className="h-3 w-3" />,
-        label: effectiveStatus.replace("_", " "),
-      };
+  let icon = <Clock className="h-3 w-3" />;
+  if (info.label === "Completed" || info.label.includes("Approved")) {
+    icon = <CheckCircle2 className="h-3 w-3" />;
+  } else if (info.label.includes("Rejected")) {
+    icon = <AlertCircle className="h-3 w-3" />;
+  } else if (info.actionRequired) {
+    icon = <AlertTriangle className="h-3 w-3" />;
+  } else if (info.label === "Submitting" || info.label === "Submitted") {
+    icon = <Send className="h-3 w-3" />;
+  } else if (info.label.includes("Progress") || info.label.includes("Uploaded")) {
+    icon = <RefreshCw className="h-3 w-3 animate-spin" />;
   }
+
+  return {
+    color: info.badgeClass,
+    icon,
+    label: info.label,
+    stageNumber: info.stageNumber,
+    description: info.description,
+  };
 }
 
 export default function StatusBadge({
   status,
   government_status,
   className = "",
+  showStage = false,
 }: {
   status: string;
   government_status?: string;
   className?: string;
+  showStage?: boolean;
 }) {
   const config = getStatusConfig(status, government_status);
 
   return (
     <span
-      className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${config.color} ${className}`}
+      className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${config.color} ${className}`}
+      title={config.description}
     >
       {config.icon}
-      <span>{config.label}</span>
+      <span>
+        {showStage && config.stageNumber ? `Stage ${config.stageNumber}: ` : ""}
+        {config.label}
+      </span>
     </span>
+  );
+}
+
+/**
+ * Reusable Document Verification Status Badge
+ */
+export function DocumentVerificationBadge({
+  verification_status,
+  verified,
+  className = "",
+  showExplanation = false,
+}: {
+  verification_status?: string;
+  verified?: boolean;
+  className?: string;
+  showExplanation?: boolean;
+}) {
+  const info = getDocumentStatusInfo(verification_status, verified);
+
+  return (
+    <div className="inline-flex flex-col">
+      <span
+        className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${info.badgeClass} ${className}`}
+      >
+        <span className="text-xs">{info.symbol}</span>
+        <span>{info.label}</span>
+      </span>
+      {showExplanation && (
+        <span className="text-[11px] text-slate-500 mt-0.5">
+          {info.citizenExplanation}
+        </span>
+      )}
+    </div>
   );
 }

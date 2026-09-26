@@ -12,7 +12,8 @@ import {
   LogOut,
   HelpCircle,
   Settings,
-  ShieldCheck
+  ShieldCheck,
+  Compass,
 } from "lucide-react";
 
 export default function Sidebar() {
@@ -21,6 +22,7 @@ export default function Sidebar() {
 
   const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { name: "Services", href: "/services", icon: Compass },
     { name: "Applications", href: "/applications", icon: FileText },
     { name: "Documents", href: "/documents", icon: FolderLock },
     { name: "Activity", href: "/activity", icon: Activity },
