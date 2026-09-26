@@ -103,6 +103,8 @@ class Document(Base):
     mime_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     verification_status: Mapped[str] = mapped_column(String(50), default="PENDING", nullable=False)
+    sha256_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    verification_details: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     extracted_data: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

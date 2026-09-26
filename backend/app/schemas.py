@@ -82,6 +82,8 @@ class DocumentRead(DocumentBase):
     user_id: uuid.UUID
     verified: bool
     verification_status: str = "PENDING"
+    sha256_hash: Optional[str] = None
+    verification_details: Optional[Any] = None
     extracted_data: Optional[Any] = None
     created_at: datetime
 

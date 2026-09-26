@@ -27,16 +27,10 @@ async def test_document_upload_and_extraction(client: AsyncClient, db_session: A
     user_id = me_res.json()["id"]
 
     # 1. Test POST /documents/upload
-    seed_file_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "seed",
-        "sample_identity_proof.txt"
-    )
+    # Valid PDF bytes (%PDF-1.4 header)
+    pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
 
-    with open(seed_file_path, "rb") as f:
-        file_bytes = f.read()
-
-    files = {"file": ("sample_identity_proof.txt", file_bytes, "text/plain")}
+    files = {"file": ("sample_identity_proof.pdf", pdf_bytes, "application/pdf")}
     data = {
         "document_type": "identity_proof",
         "citizen_id": user_id
@@ -45,9 +39,17 @@ async def test_document_upload_and_extraction(client: AsyncClient, db_session: A
     upload_res = await client.post("/documents/upload", files=files, data=data, headers=headers)
     assert upload_res.status_code == 200, upload_res.text
     doc_data = upload_res.json()
-    assert doc_data["verification_status"] == "VERIFIED"
+    # STATUS SAFETY: Document upload & extraction must result in EXTRACTED, not VERIFIED
+    assert doc_data["verification_status"] == "EXTRACTED"
+    assert doc_data["verified"] is False
     assert doc_data["extracted_data"]["name"] == "Rahul Kumar"
     assert doc_data["extracted_data"]["id_number"] == "AADHAAR-8839-2049-1122"
+
+    # Mark as VERIFIED explicitly for downstream chat test
+    doc_record = await db_session.get(Document, uuid.UUID(doc_data["id"]))
+    doc_record.verification_status = "VERIFIED"
+    doc_record.verified = True
+    await db_session.commit()
 
     # 2. Test tool_get_citizen_profile
     profile = await tool_get_citizen_profile(db_session, user_id)
@@ -79,7 +81,8 @@ async def test_upload_unauthorized_citizen(client: AsyncClient, db_session: Asyn
     headers = {"Authorization": f"Bearer {token}"}
 
     fake_id = str(uuid.uuid4())
-    files = {"file": ("test.txt", b"dummy content", "text/plain")}
+    pdf_bytes = b"%PDF-1.4 sample content"
+    files = {"file": ("test.pdf", pdf_bytes, "application/pdf")}
     data = {"document_type": "identity_proof", "citizen_id": fake_id}
 
     res = await client.post("/documents/upload", files=files, data=data, headers=headers)
@@ -95,8 +98,9 @@ async def test_filename_sanitization_and_successful_extraction(client: AsyncClie
     me_res = await client.get("/api/auth/me", headers=headers)
     user_id = me_res.json()["id"]
 
-    unsafe_name = "my file@#$.txt"
-    files = {"file": (unsafe_name, b"content", "text/plain")}
+    unsafe_name = "my file@#$.pdf"
+    pdf_bytes = b"%PDF-1.4 content"
+    files = {"file": (unsafe_name, pdf_bytes, "application/pdf")}
     data = {"document_type": "identity_proof", "citizen_id": user_id}
 
     res = await client.post("/documents/upload", files=files, data=data, headers=headers)
@@ -105,7 +109,7 @@ async def test_filename_sanitization_and_successful_extraction(client: AsyncClie
 
     assert doc["file_path"].startswith(f"documents/{user_id}/{doc['id']}/")
     basename = doc["file_path"].split("/")[-1]
-    assert "my_file___.txt" in basename
+    assert "my_file___.pdf" in basename
 
     mock_supabase.storage.from_().upload.assert_called_once()
     call_args = mock_supabase.storage.from_().upload.call_args[1]
@@ -122,7 +126,8 @@ async def test_supabase_upload_failure(client: AsyncClient, db_session: AsyncSes
 
     mock_supabase.storage.from_().upload.side_effect = Exception("Upload failed")
 
-    files = {"file": ("test.txt", b"content", "text/plain")}
+    pdf_bytes = b"%PDF-1.4 content"
+    files = {"file": ("test.pdf", pdf_bytes, "application/pdf")}
     data = {"document_type": "identity_proof", "citizen_id": user_id}
 
     res = await client.post("/documents/upload", files=files, data=data, headers=headers)
@@ -151,7 +156,8 @@ async def test_db_failure_after_upload(client: AsyncClient, db_session: AsyncSes
 
     monkeypatch.setattr(db_session, "commit", mock_commit)
 
-    files = {"file": ("test.txt", b"content", "text/plain")}
+    pdf_bytes = b"%PDF-1.4 content"
+    files = {"file": ("test.pdf", pdf_bytes, "application/pdf")}
     data = {"document_type": "identity_proof", "citizen_id": user_id}
 
     res = await client.post("/documents/upload", files=files, data=data, headers=headers)

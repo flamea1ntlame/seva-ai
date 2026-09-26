@@ -80,97 +80,179 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Security check: citizen_id must match current_user.id
+    import re
+    import hashlib
+    import tempfile
+
+    # 1. Citizen authorization check
     if str(current_user.id) != citizen_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Cannot upload documents for another citizen."
         )
 
+    # 2. Application IDOR / Ownership check
     app_uuid = None
     if application_id:
         try:
             app_uuid = uuid.UUID(application_id)
-        except ValueError:
-            pass
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid application_id format."
+            )
+        
+        # Verify that application belongs to current_user
+        app_res = await db.execute(
+            select(Application).where(Application.id == app_uuid, Application.user_id == current_user.id)
+        )
+        owned_app = app_res.scalar_one_or_none()
+        if not owned_app:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Application not found or does not belong to you."
+            )
 
-    import re
+    # 3. Filename Sanitization
     file_id = str(uuid.uuid4())
-
-    # 1. ACTUAL FILENAME SANITIZATION
-    # Get basename to prevent path traversal
     base_name = os.path.basename(file.filename or "document")
-    # Replace anything not alphanumeric, dot, underscore, dash with underscore
     sanitized_base = re.sub(r'[^A-Za-z0-9._-]', '_', base_name)
     safe_filename = f"{file_id}_{sanitized_base}"
 
-    tmp_path = os.path.join("/tmp", safe_filename)
+    # 4. Stream upload with 10 MB limit & SHA-256 calculation & Cross-platform Temp File
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    CHUNK_SIZE = 64 * 1024  # 64 KB
 
-    with open(tmp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    hasher = hashlib.sha256()
+    total_bytes = 0
+    header_bytes = bytearray()
 
-    file_size = os.path.getsize(tmp_path)
-
-    from app.config import settings
-    object_key = f"documents/{citizen_id}/{file_id}/{safe_filename}"
-    db_committed = False
-    sb_uploaded = False
-    sb_client = None
+    temp_dir = tempfile.gettempdir()
+    tmp_path = os.path.join(temp_dir, safe_filename)
 
     try:
-        # 3. UPLOAD / DATABASE TRANSACTION ORDER
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
-            from supabase import create_client
-            sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
-            sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).upload(
-                file=tmp_path,
-                path=object_key
+        with open(tmp_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE // (1024 * 1024)}MB."
+                    )
+                if len(header_bytes) < 8:
+                    header_bytes.extend(chunk[: 8 - len(header_bytes)])
+                hasher.update(chunk)
+                buffer.write(chunk)
+
+        if total_bytes == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is empty."
             )
-            sb_uploaded = True
 
-        # Initial Document row with status PENDING
-        doc = Document(
-            id=uuid.UUID(file_id),
-            user_id=current_user.id,
-            application_id=app_uuid,
-            document_type=document_type,
-            title=file.filename or document_type,
-            file_path=object_key,
-            file_size=file_size,
-            mime_type=file.content_type,
-            verified=False,
-            verification_status="PENDING",
-            extracted_data=None
+        sha256_hash = hasher.hexdigest()
+
+        # 5. Magic Byte / File Content Validation (PDF, JPEG, PNG only)
+        # PDF starts with %PDF- (0x25 0x50 0x44 0x46)
+        # JPEG starts with 0xFF 0xD8 0xFF
+        # PNG starts with 0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A
+        detected_mime = None
+        if header_bytes.startswith(b"%PDF-"):
+            detected_mime = "application/pdf"
+        elif header_bytes.startswith(b"\xff\xd8\xff"):
+            detected_mime = "image/jpeg"
+        elif header_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            detected_mime = "image/png"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Unsupported file format. Only PDF, JPEG, and PNG files are allowed."
+            )
+
+        # 6. Duplicate File Intake Handling
+        # Check if user already uploaded this exact file
+        dup_query = await db.execute(
+            select(Document).where(
+                Document.user_id == current_user.id,
+                Document.sha256_hash == sha256_hash
+            )
         )
-        db.add(doc)
-        await db.commit()
-        db_committed = True
-        await db.refresh(doc)
+        existing_doc = dup_query.scalars().first()
+        if existing_doc:
+            # If uploaded for a new application and the existing record has no application, associate it
+            if app_uuid and not existing_doc.application_id:
+                existing_doc.application_id = app_uuid
+                await db.commit()
+                await db.refresh(existing_doc)
+            return existing_doc
 
-        # Run extraction engine
-        extracted = await extract_document_fields(tmp_path, document_type)
-        doc.extracted_data = extracted
-        doc.verification_status = "VERIFIED"
-        doc.verified = True
+        file_size = total_bytes
+        from app.config import settings
+        object_key = f"documents/{citizen_id}/{file_id}/{safe_filename}"
+        db_committed = False
+        sb_uploaded = False
+        sb_client = None
 
-        await db.commit()
-        await db.refresh(doc)
+        try:
+            # Upload to Supabase Storage if configured
+            if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
+                from supabase import create_client
+                sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+                sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).upload(
+                    file=tmp_path,
+                    path=object_key
+                )
+                sb_uploaded = True
 
-        if app_uuid:
-            from app.workflows.engine import WorkflowEngine
-            await WorkflowEngine(db).advance_application(app_uuid)
+            # Initial Document row with status PENDING
+            doc = Document(
+                id=uuid.UUID(file_id),
+                user_id=current_user.id,
+                application_id=app_uuid,
+                document_type=document_type,
+                title=file.filename or document_type,
+                file_path=object_key,
+                file_size=file_size,
+                mime_type=detected_mime,
+                sha256_hash=sha256_hash,
+                verification_details=None,
+                verified=False,
+                verification_status="PENDING",
+                extracted_data=None
+            )
+            db.add(doc)
+            await db.commit()
+            db_committed = True
+            await db.refresh(doc)
 
-        return doc
-    except Exception as e:
-        if not db_committed and sb_uploaded and sb_client:
-            try:
-                sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([object_key])
-            except Exception:
-                pass
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document processing failed."
-        )
+            # Run extraction engine
+            extracted = await extract_document_fields(tmp_path, document_type)
+            doc.extracted_data = extracted
+            # STATUS SAFETY: Successful extraction MUST result in EXTRACTED, NOT VERIFIED!
+            doc.verification_status = "EXTRACTED"
+            doc.verified = False
+
+            await db.commit()
+            await db.refresh(doc)
+
+            if app_uuid:
+                from app.workflows.engine import WorkflowEngine
+                await WorkflowEngine(db).advance_application(app_uuid)
+
+            return doc
+        except Exception as e:
+            if not db_committed and sb_uploaded and sb_client:
+                try:
+                    sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([object_key])
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document processing failed."
+            )
     finally:
         if os.path.exists(tmp_path):
             try:
