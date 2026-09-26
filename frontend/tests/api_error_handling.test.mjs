@@ -294,4 +294,26 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
       }
     );
   });
+
+  await t.test("18. resolveBackendUrl handles key whitespace, lowercase casing, and surrounding quotes", () => {
+    assert.equal(
+      resolveBackendUrl({ " next_public_api_url ": "\"https://seva-ai-2hks.onrender.com/\"" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+    assert.equal(
+      resolveBackendUrl({ "BACKEND_URL ": "'https://seva-backend.internal:8000'" }),
+      "https://seva-backend.internal:8000"
+    );
+  });
+
+  await t.test("19. resolveBackendUrl supports NEXT_PUBLIC_BACKEND_URL and SEVA_BACKEND_URL", () => {
+    assert.equal(
+      resolveBackendUrl({ NEXT_PUBLIC_BACKEND_URL: "https://seva-ai-2hks.onrender.com" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+    assert.equal(
+      resolveBackendUrl({ SEVA_BACKEND_URL: "https://seva-ai-2hks.onrender.com" }),
+      "https://seva-ai-2hks.onrender.com"
+    );
+  });
 });

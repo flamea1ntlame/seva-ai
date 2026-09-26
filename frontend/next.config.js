@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
-const { resolveBackendUrl } = require("./src/lib/backendConfig");
+const path = require("path");
+const { resolveBackendUrl } = require(path.join(__dirname, "src/lib/backendConfig"));
 
 const nextConfig = {
   reactStrictMode: true,

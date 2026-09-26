@@ -6,16 +6,45 @@
  * and prevents silently falling back to localhost:8000.
  */
 function resolveBackendUrl(env = process.env) {
-  const envUrl = (
-    env.NEXT_PUBLIC_API_URL ||
-    env.BACKEND_URL ||
-    env.API_URL ||
-    env.RENDER_EXTERNAL_URL ||
-    ""
-  ).trim();
+  const targetKeys = [
+    "NEXT_PUBLIC_API_URL",
+    "BACKEND_URL",
+    "API_URL",
+    "RENDER_EXTERNAL_URL",
+    "NEXT_PUBLIC_BACKEND_URL",
+    "SEVA_BACKEND_URL",
+  ];
 
-  if (envUrl) {
-    let cleaned = envUrl.replace(/\/+$/, "");
+  let rawUrl = "";
+  if (env && typeof env === "object") {
+    // 1. Direct check
+    for (const key of targetKeys) {
+      if (typeof env[key] === "string" && env[key].trim()) {
+        rawUrl = env[key].trim();
+        break;
+      }
+    }
+
+    // 2. Case-insensitive and trimmed key fallback
+    if (!rawUrl) {
+      for (const k of Object.keys(env)) {
+        const normalizedKey = k.trim().toUpperCase();
+        if (targetKeys.includes(normalizedKey)) {
+          if (typeof env[k] === "string" && env[k].trim()) {
+            rawUrl = env[k].trim();
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (rawUrl) {
+    // Strip surrounding quotes if present
+    let cleaned = rawUrl.replace(/^["']|["']$/g, "").trim();
+    // Strip trailing slashes
+    cleaned = cleaned.replace(/\/+$/, "");
+    // Strip redundant trailing /api if present
     if (cleaned.endsWith("/api")) {
       cleaned = cleaned.slice(0, -4);
     }
