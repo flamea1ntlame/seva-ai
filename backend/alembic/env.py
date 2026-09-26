@@ -24,14 +24,18 @@ target_metadata = Base.metadata
 
 
 def get_url():
-    url = settings.SYNC_DATABASE_URL
-    for prefix in ("postgresql+asyncpg", "postgresql+psycopg3", "postgresql+psycopg", "postgres"):
-        if url.startswith(prefix + "://"):
-            url = "postgresql://" + url[len(prefix) + 3:]
-            break
-        elif url.startswith(prefix):
-            url = url.replace(prefix, "postgresql", 1)
-            break
+    url = settings.SYNC_DATABASE_URL or settings.DATABASE_URL
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+        if scheme in (
+            "postgresql",
+            "postgres",
+            "postgresql+asyncpg",
+            "postgresql+psycopg",
+            "postgresql+psycopg3",
+            "postgresql+psycopg2",
+        ):
+            return f"postgresql+psycopg2://{rest}"
     return url
 
 
