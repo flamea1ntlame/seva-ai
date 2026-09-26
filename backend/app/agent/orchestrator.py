@@ -8,7 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.models import Application
+from app.models import Application, Document, User, CitizenProfile, ChatMessage
+from app.audit import log_audit_event
+from app.service_rules import (
+    get_requirements as get_rules_requirements,
+    get_alternative_documents,
+    get_responsible_officer,
+    evaluate_citizen_readiness
+)
+from app.nlp.normalizer import normalize_text, NormalizationResult
+from app.nlp.matcher import match_intent_and_service, Intent, IntentMatchResult
+from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import (
     TOOLS_SCHEMA,
     tool_list_services,
@@ -30,14 +40,25 @@ async def run_agent_workflow(
 ) -> Dict[str, Any]:
     """
     Orchestrates the AI agent reasoning and tool execution loop.
-    Uses Gemini API with Tool Use when GEMINI_API_KEY is available,
-    or internal deterministic tool execution engine as fallback.
+    1. Normalizes input (typo correction, spelling, abbreviations) while preserving
+       the verbatim original user message for audit and debugging.
+    2. Identifies intent, service match, and conversational context.
+    3. Grounds all government requirements in authoritative service rules.
+    4. Executes with Gemini API with tool use when GEMINI_API_KEY is available,
+       or internal deterministic tool execution engine as fallback.
+    5. Persists ChatMessage and AuditLog for auditability.
     """
     from app.config import settings
     api_key = settings.GEMINI_API_KEY
     model_name = settings.GEMINI_MODEL
 
-    # Fetch existing application context
+    # Step 1: Text normalization and typo correction
+    norm_result = normalize_text(message)
+    original_message = message
+    normalized_message = norm_result.normalized_text
+    corrections = norm_result.corrections
+
+    # Step 2: Fetch existing application context for this citizen
     active_apps_result = await db.execute(
         select(Application).options(selectinload(Application.service)).where(
             Application.user_id == uuid.UUID(citizen_id),
@@ -49,6 +70,14 @@ async def run_agent_workflow(
         )
     )
     active_apps = active_apps_result.scalars().all()
+
+    # Step 3: Match intent and service
+    active_service_codes = [a.service.code for a in active_apps] if active_apps else []
+    match_result = match_intent_and_service(
+        norm_result,
+        has_active_apps=bool(active_apps),
+        active_service_codes=active_service_codes
+    )
 
     app_context_str = ""
     if active_apps:
@@ -63,13 +92,96 @@ async def run_agent_workflow(
                 app_context_str += f"  Gov Reference: {app.government_reference}\n"
         app_context_str += "\nUse this context to resolve references to 'my application'."
 
+    result: Dict[str, Any]
     if api_key:
         try:
-            return await _run_gemini_tool_workflow(message, citizen_id, db, api_key, model_name, app_context_str)
+            result = await _run_gemini_tool_workflow(
+                normalized_message, citizen_id, db, api_key, model_name, app_context_str
+            )
         except Exception as e:
             logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
+            result = await _run_fallback_tool_workflow(
+                norm_result=norm_result,
+                match_result=match_result,
+                citizen_id=citizen_id,
+                db=db,
+                active_apps=active_apps
+            )
+    else:
+        result = await _run_fallback_tool_workflow(
+            norm_result=norm_result,
+            match_result=match_result,
+            citizen_id=citizen_id,
+            db=db,
+            active_apps=active_apps
+        )
 
-    return await _run_fallback_tool_workflow(message, citizen_id, db, active_apps)
+    # Attach NLU metadata to response
+    result["detected_intent"] = match_result.intent
+    result["normalized_message"] = normalized_message
+    if corrections:
+        result["corrections"] = corrections
+
+    # Step 4: Audit & conversation persistence
+    try:
+        app_uuid = None
+        if result.get("application_id"):
+            try:
+                app_uuid = uuid.UUID(str(result["application_id"]))
+            except ValueError:
+                pass
+
+        user_uuid = uuid.UUID(citizen_id)
+
+        # Store citizen message with original verbatim text and normalized text
+        citizen_chat = ChatMessage(
+            user_id=user_uuid,
+            application_id=app_uuid,
+            role="user",
+            original_message=original_message,
+            normalized_message=normalized_message,
+            intent=match_result.intent,
+            service_code=result.get("service_code") or match_result.service_code,
+            corrections=corrections if corrections else None,
+            reply=None
+        )
+        db.add(citizen_chat)
+
+        # Store AI response
+        ai_chat = ChatMessage(
+            user_id=user_uuid,
+            application_id=app_uuid,
+            role="assistant",
+            original_message=result.get("reply", ""),
+            normalized_message=None,
+            intent=match_result.intent,
+            service_code=result.get("service_code") or match_result.service_code,
+            corrections=None,
+            reply=result.get("reply", "")
+        )
+        db.add(ai_chat)
+
+        # Log audit entry preserving original user message for audit/debugging
+        await log_audit_event(
+            db=db,
+            actor_type="CITIZEN",
+            action="CHAT_MESSAGE",
+            resource_type="chat",
+            user_id=user_uuid,
+            resource_id=str(app_uuid) if app_uuid else None,
+            details={
+                "original_message": original_message,
+                "normalized_message": normalized_message,
+                "corrections": corrections,
+                "intent": match_result.intent,
+                "service_code": result.get("service_code") or match_result.service_code,
+            }
+        )
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist chat audit: {e}")
+
+    return result
 
 
 async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: AsyncSession) -> Dict[str, Any]:
@@ -78,10 +190,10 @@ async def _execute_tool(tool_name: str, tool_args: dict, citizen_id: str, db: As
 
     activity_map = {
         "list_services": "Checking available services...",
-        "get_service_requirements": "Checking service requirements...",
+        "get_service_requirements": "Checking authoritative service requirements...",
         "create_application": "Preparing your application...",
         "extract_document_data": "Extracting information from your document...",
-        "get_citizen_profile": "Checking your profile...",
+        "get_citizen_profile": "Checking your verified profile...",
         "request_consent": "Preparing your consent request...",
         "submit_application": "Submitting your application..."
     }
@@ -212,8 +324,6 @@ async def _run_gemini_tool_workflow(
     response = await call_gemini()
 
     while response.function_calls:
-        # Append the model's response to history
-        # Function calls are returned as parts in the model's response
         messages.append(types.Content(role="model", parts=response.candidates[0].content.parts))
 
         function_responses = []
@@ -225,7 +335,6 @@ async def _run_gemini_tool_workflow(
                 t_args["citizen_id"] = citizen_id
 
             t_result = await _execute_tool(t_name, t_args, citizen_id, db)
-            print(f"DEBUG: tool {t_name} returned {t_result}")
 
             if isinstance(t_result, dict):
                 if "application_id" in t_result or "current_status" in t_result:
@@ -250,8 +359,6 @@ async def _run_gemini_tool_workflow(
             )
 
         messages.append(types.Content(role="user", parts=function_responses))
-        print(f"DEBUG: sending to LLM. created_app_info={created_app_info}")
-
         response = await call_gemini()
 
     reply_text = response.text if response.text else ""
@@ -267,24 +374,24 @@ async def _run_gemini_tool_workflow(
 
 
 async def _run_fallback_tool_workflow(
-    message: str,
+    norm_result: NormalizationResult,
+    match_result: IntentMatchResult,
     citizen_id: str,
     db: AsyncSession,
     active_apps: List[Application] = []
 ) -> Dict[str, Any]:
-    msg_lower = message.strip().lower()
+    """
+    Deterministic language understanding & service rules grounding engine.
+    Ensures exact compliance without hallucinating requirements.
+    """
+    text = norm_result.normalized_text.lower().strip()
+    target_service_code = match_result.service_code
 
-    # Step 1: Detect intent
-    target_service_code: Optional[str] = None
-    if "driving" in msg_lower or "licence" in msg_lower or "license" in msg_lower:
-        target_service_code = "driving_license"
-    elif "income" in msg_lower:
-        target_service_code = "income_certificate"
-    elif "birth" in msg_lower:
-        target_service_code = "birth_certificate"
+    # 1. Filter active apps if user specified explicit SEVA references
+    explicit_refs = re.findall(r"\bseva-\d+\b", norm_result.original_text.lower())
+    if not explicit_refs:
+        explicit_refs = re.findall(r"\bseva-\d+\b", text)
 
-    # Filter active apps if user specified explicit SEVA references
-    explicit_refs = re.findall(r"\bseva-\d+\b", msg_lower)
     if explicit_refs:
         if len(explicit_refs) > 1:
             return {
@@ -312,12 +419,36 @@ async def _run_fallback_tool_workflow(
     elif target_service_code:
         # Filter active apps if user specified a service and no explicit SEVA ref
         matching_apps = [a for a in active_apps if a.service.code == target_service_code]
-        # Only restrict if it narrows it down
         if matching_apps:
             active_apps = matching_apps
 
-    # Minimal fallback logic for existing applications
-    if len(active_apps) > 1 and ("prepare" in msg_lower or "submit" in msg_lower or "ready" in msg_lower or "application" in msg_lower):
+    # 2. Check info request for an existing application (e.g., 'What documents are required for an Income Certificate?')
+    is_general_info_query = any(k in text for k in [
+        "what documents are required", "what are the requirements",
+        "which documents are required", "what papers are needed", "requirements for"
+    ])
+    if is_general_info_query and len(active_apps) == 1 and target_service_code == active_apps[0].service.code:
+        app = active_apps[0]
+        reqs = get_rules_requirements(app.service.code)
+        docs_list = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in reqs["required_documents"]])
+        fields_list = "\n".join([f"  • {f.replace('_', ' ').title()}" for f in reqs["required_fields"]])
+        reply = (
+            f"Here are the official requirements for **{reqs['service_name']}** (Department of {reqs['department'].title()}):\n\n"
+            f"📋 **Required Documents:**\n{docs_list}\n\n"
+            f"📝 **Required Information:**\n{fields_list}\n\n"
+            f"Your active application reference is `{app.application_number}` (Status: `{app.status}`)."
+        )
+        return {
+            "reply": reply,
+            "application_id": str(app.id),
+            "service_code": app.service.code,
+            "status": app.status,
+            "required_documents": reqs["required_documents"],
+            "required_fields": reqs["required_fields"],
+        }
+
+    # 3. Disambiguate multiple active apps when submitting/preparing
+    if len(active_apps) > 1 and match_result.intent == Intent.PREPARE_OR_SUBMIT and not explicit_refs:
         titles = ", ".join([f"{a.service.title} ({a.application_number})" for a in active_apps])
         return {
             "reply": f"You have multiple active applications: {titles}. Could you please specify which application you are referring to?",
@@ -328,7 +459,8 @@ async def _run_fallback_tool_workflow(
             "required_fields": [],
         }
 
-    if len(active_apps) == 1 and ("prepare" in msg_lower or "submit" in msg_lower or "ready" in msg_lower or "application" in msg_lower):
+    # 4. Handle single active app ready for consent/submission
+    if len(active_apps) == 1 and match_result.intent == Intent.PREPARE_OR_SUBMIT:
         app = active_apps[0]
         if app.status == "READY_FOR_REVIEW":
             consent_res = await _execute_tool("request_consent", {
@@ -338,7 +470,7 @@ async def _run_fallback_tool_workflow(
                 "purpose": "Application Processing"
             }, citizen_id, db)
             return {
-                "reply": f"I have prepared your application for submission. Please review and approve the consent request.",
+                "reply": "I have prepared your application for submission. Please review and approve the consent request.",
                 "application_id": str(app.id),
                 "service_code": app.service.code,
                 "status": "CONSENT_REQUIRED",
@@ -355,7 +487,124 @@ async def _run_fallback_tool_workflow(
                 "required_fields": [],
             }
 
-    # Step 2: Ambiguous intent -> call list_services() tool
+    # 5. Handle "how can i prove my family income" / "where do i get income proof"
+    if any(k in text for k in ["prove my family income", "prove family income", "where do i get income proof", "where do i get income"]):
+        rules = get_rules_requirements("income_certificate")
+        income_options = rules["document_options"].get("income_proof", [])
+        opts_formatted = "\n".join([f"  • **{opt['name']}** (Authority: *{opt['authority']}*)" for opt in income_options])
+        authority = rules.get("responsible_authority", {})
+        
+        reply = (
+            f"To prove family income for an official **{rules['service_name']}**, government revenue rules recognize the following source-backed proofs:\n\n"
+            f"{opts_formatted}\n\n"
+            f"🏛️ **Responsible Authority:** {authority.get('title', 'Tahsildar')}, {authority.get('office', 'Taluk Office')}.\n"
+            f"ℹ️ *You can obtain salary slips from your employer, Form 16/ITR from the Income Tax portal, or an income affidavit from a notary or Executive Magistrate.*"
+        )
+        matched_app_id = str(active_apps[0].id) if active_apps and active_apps[0].service.code == "income_certificate" else None
+        return {
+            "reply": reply,
+            "application_id": matched_app_id,
+            "service_code": "income_certificate",
+            "status": active_apps[0].status if matched_app_id else None,
+            "required_documents": rules["required_documents"],
+            "required_fields": rules["required_fields"],
+        }
+
+    # 6. Handle "i already uploaded my id" / Document Upload Follow-up
+    if match_result.intent == Intent.DOCUMENT_UPLOADED_FOLLOWUP:
+        profile_data = await _execute_tool("get_citizen_profile", {"citizen_id": citizen_id}, citizen_id, db)
+        uploaded_docs = profile_data.get("uploaded_document_types", [])
+        
+        target_app = active_apps[0] if active_apps else None
+        target_code = target_service_code or (target_app.service.code if target_app else "income_certificate")
+        rules = get_rules_requirements(target_code)
+        
+        missing_docs = [d for d in rules["required_documents"] if d not in uploaded_docs]
+        verified_items = [d.replace('_', ' ').title() for d in uploaded_docs]
+        verified_str = ", ".join(verified_items) if verified_items else "Identity proof"
+        
+        if missing_docs:
+            missing_formatted = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in missing_docs])
+            reply = (
+                f"✅ I have recorded your verified document(s): **{verified_str}**.\n\n"
+                f"To complete your **{rules['service_name']}** application, we still require:\n"
+                f"{missing_formatted}\n\n"
+                f"Please upload the remaining document(s) to proceed."
+            )
+        else:
+            reply = (
+                f"✅ All required documents for **{rules['service_name']}** have been uploaded and verified!\n\n"
+                f"Your application is ready for review. You can tell me 'Please prepare my application' to proceed to submission."
+            )
+
+        return {
+            "reply": reply,
+            "application_id": str(target_app.id) if target_app else None,
+            "service_code": target_code,
+            "status": target_app.status if target_app else "COLLECTING_DOCUMENTS",
+            "required_documents": missing_docs,
+            "required_fields": rules["required_fields"],
+        }
+
+    # 7. Handle "what am i missing?"
+    if match_result.intent == Intent.CHECK_STATUS_OR_MISSING:
+        if active_apps:
+            app = active_apps[0]
+            profile_data = await _execute_tool("get_citizen_profile", {"citizen_id": citizen_id}, citizen_id, db)
+            merged_profile = profile_data.get("merged_profile", {})
+            uploaded_docs = profile_data.get("uploaded_document_types", [])
+
+            readiness = evaluate_citizen_readiness(app.service.code, uploaded_docs, merged_profile)
+            missing_docs = readiness["missing_documents"]
+            missing_fields = readiness["missing_fields"]
+
+            docs_formatted = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in missing_docs]) if missing_docs else "  • All required documents verified! ✅"
+            fields_formatted = "\n".join([f"  • {f.replace('_', ' ').title()}" for f in missing_fields]) if missing_fields else "  • All required fields completed! ✅"
+
+            reply = (
+                f"Here is the status breakdown for your **{readiness['service_name']}** application (`{app.application_number}`):\n\n"
+                f"📋 **Missing Documents:**\n{docs_formatted}\n\n"
+                f"📝 **Missing Information:**\n{fields_formatted}\n\n"
+                f"**Current Status:** `{app.status}`"
+            )
+            return {
+                "reply": reply,
+                "application_id": str(app.id),
+                "service_code": app.service.code,
+                "status": app.status,
+                "required_documents": missing_docs,
+                "required_fields": missing_fields,
+            }
+
+    # 8. Handle service requirements query (e.g. "what papers do i need", "what documents are required")
+    if match_result.intent == Intent.CHECK_REQUIREMENTS:
+        req_service_code = target_service_code or (active_apps[-1].service.code if active_apps else None)
+        if req_service_code:
+            rules = get_rules_requirements(req_service_code)
+            docs_list = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in rules["required_documents"]])
+            fields_list = "\n".join([f"  • {f.replace('_', ' ').title()}" for f in rules["required_fields"]])
+            
+            matched_app = next((a for a in active_apps if a.service.code == req_service_code), None)
+            app_str = f" for your `{matched_app.application_number}` application" if matched_app else ""
+            
+            reply = (
+                f"For an official **{rules['service_name']}** ({rules['department'].title()} Department){app_str}, "
+                f"the required government documents and fields according to rules are:\n\n"
+                f"📋 **Required Documents:**\n{docs_list}\n\n"
+                f"📝 **Required Information:**\n{fields_list}\n\n"
+                f"⏱️ Estimated Processing Time: {rules['processing_time_days']} days | Fee: ₹{rules['fee_amount']:.2f}"
+            )
+            matched_app_id = str(matched_app.id) if matched_app else None
+            return {
+                "reply": reply,
+                "application_id": matched_app_id,
+                "service_code": req_service_code,
+                "status": matched_app.status if matched_app else None,
+                "required_documents": rules["required_documents"],
+                "required_fields": rules["required_fields"],
+            }
+
+    # 9. Ambiguous intent -> call list_services()
     if not target_service_code:
         services = (await _execute_tool("list_services", {}, citizen_id, db)).get("services", [])
         titles = ", ".join([f"'{s['title']}' ({s['code']})" for s in services])
@@ -374,7 +623,9 @@ async def _run_fallback_tool_workflow(
             "required_fields": [],
         }
 
-    # Step 3: Fetch service requirements
+    # 10. Service application / initiation
+    # Fetch authoritative requirements from service_rules
+    rules = get_rules_requirements(target_service_code)
     requirements = await _execute_tool("get_service_requirements", {"service_code": target_service_code}, citizen_id, db)
     if "error" in requirements:
         return {
@@ -386,20 +637,18 @@ async def _run_fallback_tool_workflow(
             "required_fields": [],
         }
 
-    # Step 4: Fetch citizen merged profile & uploaded documents
     profile_data = await _execute_tool("get_citizen_profile", {"citizen_id": citizen_id}, citizen_id, db)
     merged_profile = profile_data.get("merged_profile", {})
     uploaded_docs = profile_data.get("uploaded_document_types", [])
 
-    # Filter out requirements already provided/extracted
     all_docs = requirements.get("required_documents", [])
     all_fields = requirements.get("required_fields", [])
 
     missing_docs = [doc for doc in all_docs if doc not in uploaded_docs]
     missing_fields = [field for field in all_fields if field not in merged_profile]
 
-    # Step 5: Create application if not created yet, otherwise reuse
-    if len(active_apps) > 0:
+    # Create application if not already created
+    if len(active_apps) > 0 and active_apps[0].service.code == target_service_code:
         app_result = {
             "application_id": str(active_apps[0].id),
             "application_number": active_apps[0].application_number,
@@ -417,20 +666,40 @@ async def _run_fallback_tool_workflow(
                 "required_fields": missing_fields,
             }
 
-    # Format helpful output reflecting verified vs missing requirements
     docs_formatted = "\n".join([f"  • {doc.replace('_', ' ').title()}" for doc in missing_docs]) if missing_docs else "  • All required documents uploaded and verified! ✅"
     fields_formatted = "\n".join([f"  • {field.replace('_', ' ').title()}" for field in missing_fields]) if missing_fields else "  • All required information extracted! ✅"
 
     verified_summary = ""
-    if uploaded_docs or merged_profile:
+    if uploaded_docs:
         verified_items = [d.replace('_', ' ').title() for d in uploaded_docs]
         verified_summary = f"\n\n✅ **Verified Data Already in Profile:**\n" + "\n".join([f"  • {item}" for item in verified_items])
 
+    # Contextual note for scholarship
+    scholarship_note = ""
+    if "scholarship" in text or "scholership" in text:
+        scholarship_note = (
+            "🎓 *Scholarship Guidance: Government scholarships require an official Income Certificate issued by the Revenue Department "
+            "to verify your family's annual income eligibility ceiling.*\n\n"
+        )
+
+    # Contextual note for newborn birth registration
+    newborn_note = ""
+    if "newborn" in text or "new born" in text or "baby" in text:
+        newborn_note = (
+            "👶 *Note: A newborn child's Aadhaar is NOT required for birth registration. "
+            "The hospital birth notification and parents' identity proof are the authoritative legal records required.*\n\n"
+        )
+
+    authority_info = rules.get("responsible_authority", {})
+    office_str = f"🏛️ **Issuing Authority:** {authority_info.get('title', 'Competent Authority')}, {authority_info.get('office', 'Departmental Office')}\n\n"
+
     reply_text = (
+        f"{scholarship_note}{newborn_note}"
         f"I have initialized your application workflow for **{requirements['service_name']}** "
         f"(Department: *{requirements['department'].title()}*).\n\n"
         f"**Application Reference ID:** `{app_result['application_number']}`\n"
-        f"**Workflow Status:** `DISCOVER`{verified_summary}\n\n"
+        f"**Workflow Status:** `{app_result['current_status']}`{verified_summary}\n\n"
+        f"{office_str}"
         f"📋 **Documents Still Needed:**\n{docs_formatted}\n\n"
         f"📝 **Information Still Needed:**\n{fields_formatted}\n\n"
         "ℹ️ *Note: Upload your documents below to auto-verify and complete your application preparation.*"

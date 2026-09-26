@@ -266,3 +266,31 @@ class AuditLog(Base):
     )
 
     user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    application_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(50), nullable=False)
+    original_message: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    intent: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    service_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    corrections: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    reply: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped["User"] = relationship("User", backref="chat_messages")
+    application: Mapped[Optional["Application"]] = relationship("Application", backref="chat_messages")
+

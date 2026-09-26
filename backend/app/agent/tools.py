@@ -145,6 +145,7 @@ async def tool_list_services(db: AsyncSession) -> List[Dict[str, Any]]:
 
 
 async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> Dict[str, Any]:
+    from app.service_rules import get_requirements as get_rules_requirements
     result = await db.execute(select(Service).where(Service.code == service_code))
     service = result.scalar_one_or_none()
     if not service:
@@ -153,15 +154,22 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
             "service_code": service_code
         }
     
+    rules_data = get_rules_requirements(service.code)
+    
     return {
         "service_code": service.code,
         "service_name": service.title,
         "department": service.department,
-        "required_documents": service.required_documents or [],
-        "required_fields": service.required_fields or [],
-        "description": service.description,
+        "required_documents": service.required_documents or rules_data.get("required_documents", []),
+        "required_fields": service.required_fields or rules_data.get("required_fields", []),
+        "description": service.description or rules_data.get("description", ""),
         "fee_amount": float(service.fee_amount),
         "processing_time_days": service.processing_time_days,
+        "document_options": rules_data.get("document_options", {}),
+        "document_dependencies": rules_data.get("document_dependencies", []),
+        "responsible_authority": rules_data.get("responsible_authority", {}),
+        "jurisdiction": rules_data.get("jurisdiction", {}),
+        "scholarship_guidance": rules_data.get("scholarship_guidance"),
     }
 
 

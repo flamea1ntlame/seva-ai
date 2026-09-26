@@ -176,6 +176,30 @@ class ChatResponse(BaseModel):
     status: Optional[str] = None
     required_documents: List[str] = []
     required_fields: List[str] = []
+    detected_intent: Optional[str] = None
+    normalized_message: Optional[str] = None
+    missing_documents: List[str] = []
+    verified_documents: List[str] = []
+    clarification_options: List[str] = []
+    jurisdiction: Optional[str] = None
+    responsible_officer: Optional[str] = None
+
+
+class ChatMessageRead(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    application_id: Optional[uuid.UUID] = None
+    role: str
+    original_message: str
+    normalized_message: Optional[str] = None
+    intent: Optional[str] = None
+    service_code: Optional[str] = None
+    corrections: Optional[Any] = None
+    reply: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 class VaultStats(BaseModel):
     total: int
