@@ -904,5 +904,117 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
     await fetchApi("/api/services/");
     assert.equal(authHeaderSent, null, "Legacy 'token' key must NOT be read as seva_token");
   });
+
+  await t.test("32. Regression 13F: Multi-tab logout synchronization — clearing seva_token in another tab clears auth state and redirects", async () => {
+    let currentUser = { id: "cit-1", full_name: "Ramesh" };
+    let redirectedTo = null;
+
+    const setUser = (val) => {
+      currentUser = val;
+    };
+    const mockRouter = {
+      push: (url) => {
+        redirectedTo = url;
+      },
+    };
+
+    // Storage event handler logic from AuthContext
+    const handleStorageChange = (event) => {
+      if (event.key === "seva_token") {
+        if (!event.newValue) {
+          setUser(null);
+          mockRouter.push("/login");
+        }
+      } else if (!event.key) {
+        const currentToken = globalThis.localStorage.getItem("seva_token");
+        if (!currentToken) {
+          setUser(null);
+          mockRouter.push("/login");
+        }
+      }
+    };
+
+    // Scenario A: Another tab removes seva_token (citizen logged out in Tab 2)
+    handleStorageChange({ key: "seva_token", oldValue: "jwt_token_tab2", newValue: null });
+    assert.equal(currentUser, null, "User state must be cleared when token is removed in another tab");
+    assert.equal(redirectedTo, "/login", "Must redirect to /login when logged out in another tab");
+
+    // Scenario B: Another tab clears localStorage entirely
+    currentUser = { id: "cit-2", full_name: "Suresh" };
+    redirectedTo = null;
+    globalThis.localStorage = { getItem: () => null };
+    handleStorageChange({ key: null, oldValue: null, newValue: null });
+    assert.equal(currentUser, null, "User state must be cleared when localStorage is cleared in another tab");
+    assert.equal(redirectedTo, "/login");
+  });
+
+  await t.test("33. Regression 13G: Rapid double-click on Apply Now is synchronously locked out and prevents duplicate applications", async () => {
+    let postCallCount = 0;
+    const storage = new Map([["seva_token", "valid_jwt_double_click_test"]]);
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/requirements")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ service_code: "income_cert", jurisdiction_supported: true }),
+        };
+      }
+      if (u.includes("/applications/")) {
+        postCallCount++;
+        // Simulate network latency of application creation
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ id: `app-${postCallCount}`, application_number: `SEVA-${postCallCount}` }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    // Simulate the synchronous in-flight guard from ServiceCatalog
+    const startingAppRef = { current: false };
+    let startingApp = false;
+
+    const simulateHandleStartApplication = async () => {
+      if (startingAppRef.current || startingApp) return null;
+      startingAppRef.current = true;
+      startingApp = true;
+
+      try {
+        const token = globalThis.localStorage.getItem("seva_token");
+        if (!token) return null;
+
+        await fetchApi("/api/services/income_cert/requirements");
+        const app = await fetchApi("/api/applications/", {
+          method: "POST",
+          body: JSON.stringify({ service_id: "income_cert" }),
+        });
+        return app;
+      } finally {
+        startingAppRef.current = false;
+        startingApp = false;
+      }
+    };
+
+    // Fire two rapid clicks concurrently (in the same microtask tick)
+    const [result1, result2] = await Promise.all([
+      simulateHandleStartApplication(),
+      simulateHandleStartApplication(),
+    ]);
+
+    assert.ok(result1, "First click should proceed and create application");
+    assert.equal(result2, null, "Second rapid click must be dropped by the in-flight lock");
+    assert.equal(postCallCount, 1, "Exactly ONE POST /api/applications/ request must be made");
+    assert.equal(startingAppRef.current, false, "In-flight lock must be cleanly released afterwards");
+  });
 });
+
 

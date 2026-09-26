@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { fetchApi, ApiError, handleSessionValidationOn401 } from "@/lib/api";
 import {
@@ -80,6 +80,7 @@ export default function ServiceCatalog({
   const [serviceRequirements, setServiceRequirements] = useState<ServiceDetailRequirements | null>(null);
   const [loadingReqs, setLoadingReqs] = useState(false);
   const [startingApp, setStartingApp] = useState(false);
+  const startingAppRef = useRef(false);
 
   const loadServices = useCallback(() => {
     setLoading(true);
@@ -130,68 +131,69 @@ export default function ServiceCatalog({
   };
 
   const handleStartApplication = async (service: ServiceItem) => {
-    if (startingApp) return;
-
-    // Check token presence before starting
-    const rawToken =
-      typeof window !== "undefined" && typeof localStorage !== "undefined"
-        ? localStorage.getItem("seva_token")
-        : null;
-    const token =
-      rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
-        ? rawToken.trim()
-        : null;
-
-    if (!token) {
-      if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
-        localStorage.removeItem("seva_token");
-      }
-      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-        window.dispatchEvent(new CustomEvent("seva:session_expired"));
-      }
-      router.push("/login?session_expired=1");
-      return;
-    }
-
-    // Verify jurisdiction support (using cached requirements or fetching fresh)
-    let reqs = (selectedService?.id === service.id) ? serviceRequirements : null;
-    if (!reqs) {
-      try {
-        reqs = await fetchApi(`/api/services/${service.code}/requirements`);
-      } catch (reqErr: any) {
-        const is401 = reqErr instanceof ApiError ? reqErr.status === 401 : reqErr?.status === 401;
-        if (is401) {
-          const isValid = await handleSessionValidationOn401(reqErr, router);
-          if (!isValid) return;
-        }
-        // If backend requirements fetch fails, proceed with cautious validation
-      }
-    }
-
-    if (reqs) {
-      const allowed = isJurisdictionSupported(
-        reqs.jurisdiction_notice,
-        reqs.jurisdiction_supported
-      );
-      if (!allowed) {
-        const msg = getJurisdictionBlockMessage(
-          reqs.jurisdiction_notice,
-          reqs.jurisdiction_supported,
-          reqs.jurisdiction
-        );
-        setError(msg || "Official requirements for this jurisdiction are not verified in SEVA. Application creation is disabled.");
-        return;
-      }
-    }
-
-    if (onSelectService) {
-      onSelectService(service);
-      return;
-    }
-
+    if (startingAppRef.current || startingApp) return;
+    startingAppRef.current = true;
     setStartingApp(true);
     setError(null);
+
     try {
+      // Check token presence before starting
+      const rawToken =
+        typeof window !== "undefined" && typeof localStorage !== "undefined"
+          ? localStorage.getItem("seva_token")
+          : null;
+      const token =
+        rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
+          ? rawToken.trim()
+          : null;
+
+      if (!token) {
+        if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+          localStorage.removeItem("seva_token");
+        }
+        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+          window.dispatchEvent(new CustomEvent("seva:session_expired"));
+        }
+        router.push("/login?session_expired=1");
+        return;
+      }
+
+      // Verify jurisdiction support (using cached requirements or fetching fresh)
+      let reqs = (selectedService?.id === service.id) ? serviceRequirements : null;
+      if (!reqs) {
+        try {
+          reqs = await fetchApi(`/api/services/${service.code}/requirements`);
+        } catch (reqErr: any) {
+          const is401 = reqErr instanceof ApiError ? reqErr.status === 401 : reqErr?.status === 401;
+          if (is401) {
+            const isValid = await handleSessionValidationOn401(reqErr, router);
+            if (!isValid) return;
+          }
+          // If backend requirements fetch fails, proceed with cautious validation
+        }
+      }
+
+      if (reqs) {
+        const allowed = isJurisdictionSupported(
+          reqs.jurisdiction_notice,
+          reqs.jurisdiction_supported
+        );
+        if (!allowed) {
+          const msg = getJurisdictionBlockMessage(
+            reqs.jurisdiction_notice,
+            reqs.jurisdiction_supported,
+            reqs.jurisdiction
+          );
+          setError(msg || "Official requirements for this jurisdiction are not verified in SEVA. Application creation is disabled.");
+          return;
+        }
+      }
+
+      if (onSelectService) {
+        onSelectService(service);
+        return;
+      }
+
       const app = await fetchApi("/api/applications/", {
         method: "POST",
         body: JSON.stringify({
@@ -211,6 +213,7 @@ export default function ServiceCatalog({
       }
       setError(err.message || "Failed to start application. Please try again.");
     } finally {
+      startingAppRef.current = false;
       setStartingApp(false);
     }
   };

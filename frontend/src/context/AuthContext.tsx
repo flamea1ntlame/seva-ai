@@ -81,9 +81,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       router.push("/login?session_expired=1");
     };
 
+    // Multi-tab logout synchronization:
+    // When seva_token is removed or cleared in another tab, clear this tab's auth state
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === "seva_token") {
+        if (!event.newValue) {
+          setUser(null);
+          router.push("/login");
+        } else if (event.newValue !== event.oldValue) {
+          refreshUser().catch(() => {});
+        }
+      } else if (!event.key) {
+        const currentToken = typeof window !== "undefined" ? localStorage.getItem("seva_token") : null;
+        if (!currentToken) {
+          setUser(null);
+          router.push("/login");
+        }
+      }
+    };
+
     window.addEventListener("seva:session_expired", handleExpired);
+    window.addEventListener("storage", handleStorageChange);
     return () => {
       window.removeEventListener("seva:session_expired", handleExpired);
+      window.removeEventListener("storage", handleStorageChange);
     };
   }, [refreshUser, router]);
 
