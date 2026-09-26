@@ -225,7 +225,6 @@ async def _run_gemini_tool_workflow(
                 t_args["citizen_id"] = citizen_id
 
             t_result = await _execute_tool(t_name, t_args, citizen_id, db)
-            print(f"DEBUG: tool {t_name} returned {t_result}")
 
             if isinstance(t_result, dict):
                 if "application_id" in t_result or "current_status" in t_result:
@@ -250,7 +249,6 @@ async def _run_gemini_tool_workflow(
             )
 
         messages.append(types.Content(role="user", parts=function_responses))
-        print(f"DEBUG: sending to LLM. created_app_info={created_app_info}")
 
         response = await call_gemini()
 

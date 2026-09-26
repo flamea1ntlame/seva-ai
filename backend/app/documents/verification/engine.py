@@ -29,7 +29,7 @@ class DocumentVerificationEngine:
     RULE: Supporting evidence alone NEVER produces VERIFIED.
     """
 
-    def __init__(self):
+    def __init__(self, registry_adapter: Optional[GovernmentRegistryAdapter] = None):
         self._validators: Dict[str, BaseDocumentValidator] = {
             "aadhaar": AadhaarValidator(),
             "pan": PanValidator(),
@@ -38,7 +38,7 @@ class DocumentVerificationEngine:
         }
         self.issuer_adapter = DefaultGovernmentIssuerAdapter()
         self.digilocker_adapter = DigiLockerAdapter()
-        self.registry_adapter = GovernmentRegistryAdapter()
+        self.registry_adapter = registry_adapter or GovernmentRegistryAdapter()
 
     async def verify(
         self,
@@ -156,7 +156,11 @@ class DocumentVerificationEngine:
             risk_flags.extend(digi_res.risk_flags)
 
         # 7. Registry Matching Adapter (Strong evidence candidate)
-        reg_res = await self.registry_adapter.lookup(effective_type, clean_identifier or "")
+        reg_res = await self.registry_adapter.lookup(
+            effective_type,
+            clean_identifier or "",
+            metadata={"extracted_fields": extraction.extracted_fields, "details": val_outcome.details}
+        )
         methods.append(VerificationMethod.REGISTRY_MATCH.value)
         checks_passed.extend(reg_res.checks_passed)
         checks_failed.extend(reg_res.checks_failed)
@@ -218,6 +222,8 @@ class DocumentVerificationEngine:
                 "detected_type": detected_type,
                 "classification_confidence": class_conf,
                 "has_strong_evidence": has_strong_evidence,
-                "sha256_hash": sha256_hash
+                "sha256_hash": sha256_hash,
+                "verification_source": reg_res.details.get("source") if reg_res.is_matched else None,
+                "registry_details": reg_res.details,
             }
         )

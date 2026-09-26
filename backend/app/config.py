@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
+    # Person 4 Integration: Isolated Staging/Demo Registry Verification Mode
+    # Disabled by default. Production path strictly refuses fake verification.
+    ENABLE_MOCK_REGISTRY_VERIFICATION: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -5,6 +5,7 @@ from app.documents.schemas import ExtractionResult, DocumentVerificationStatus
 from app.documents.verification.engine import DocumentVerificationEngine
 from app.documents.verification.classifier import classify_document
 from app.documents.verification.algorithms.verhoeff import validate_verhoeff, generate_verhoeff
+from app.documents.verification.registry_adapter import GovernmentRegistryAdapter, DEMO_REGISTRY_FIXTURES
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +247,154 @@ async def test_ocr_only_evidence_never_verified():
         assert res.status != DocumentVerificationStatus.VERIFIED
         assert res.is_authentic is False
         assert res.status == DocumentVerificationStatus.NEEDS_REVIEW
+
+
+# ---------------------------------------------------------------------------
+# 4. Demo / Staging Registry & Integration Hardening Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_staging_registry_disabled_by_default():
+    """
+    Test A: Mock registry disabled
+    -> no mock verification
+    -> external verification remains unavailable
+    -> status remains NEEDS_REVIEW
+    """
+    adapter = GovernmentRegistryAdapter(mock_enabled=False)
+    assert adapter.is_mock_enabled is False
+
+    res = await adapter.lookup("aadhaar", "883920491122")
+    assert res.is_matched is False
+    assert res.is_available is False
+    assert "REGISTRY_UNREACHABLE" in res.risk_flags
+    assert res.details["status"] == "REGISTRY_UNAVAILABLE"
+    assert res.details["environment"] == "production"
+
+    # Full engine run with disabled mock registry
+    engine = DocumentVerificationEngine(registry_adapter=adapter)
+    extraction = ExtractionResult(
+        document_type="aadhaar",
+        extracted_fields={"name": "Rahul Kumar", "id_number": "883920491122"},
+        raw_text="GOVERNMENT OF INDIA AADHAAR 8839 2049 1122"
+    )
+    engine_res = await engine.verify(extraction)
+    assert engine_res.status == DocumentVerificationStatus.NEEDS_REVIEW
+    assert engine_res.is_authentic is False
+
+
+@pytest.mark.asyncio
+async def test_staging_registry_enabled_matching_demo_fixture():
+    """
+    Test B: Mock registry enabled
+    -> matching demo fixture
+    -> REGISTRY_MATCHED strong-evidence result
+    -> verified=True
+    """
+    adapter = GovernmentRegistryAdapter(mock_enabled=True)
+    assert adapter.is_mock_enabled is True
+
+    # Lookup matching demo Aadhaar
+    res = await adapter.lookup("aadhaar", "883920491122")
+    assert res.is_matched is True
+    assert res.is_available is True
+    assert "demo_registry_fixture_matched" in res.checks_passed
+    assert res.details["status"] == "REGISTRY_MATCHED"
+    assert res.details["source"] == "DEMO_REGISTRY"
+    assert res.details["environment"] == "staging"
+    assert res.details["is_demo_fixture"] is True
+
+    # Full engine run with enabled mock registry
+    engine = DocumentVerificationEngine(registry_adapter=adapter)
+    extraction = ExtractionResult(
+        document_type="aadhaar",
+        extracted_fields={"name": "Rahul Kumar", "id_number": "883920491122"},
+        raw_text="GOVERNMENT OF INDIA AADHAAR 8839 2049 1122"
+    )
+    engine_res = await engine.verify(extraction)
+    assert engine_res.status == DocumentVerificationStatus.VERIFIED
+    assert engine_res.is_authentic is True
+    assert engine_res.details["verification_source"] == "DEMO_REGISTRY"
+    assert engine_res.details["registry_details"]["environment"] == "staging"
+
+
+@pytest.mark.asyncio
+async def test_staging_registry_enabled_non_matching_document():
+    """
+    Test C: Mock registry enabled
+    -> non-matching document
+    -> does NOT become VERIFIED
+    -> status remains NEEDS_REVIEW
+    """
+    adapter = GovernmentRegistryAdapter(mock_enabled=True)
+
+    # Valid Aadhaar starting with 2-9, non-trivial, valid Verhoeff, but NOT in DEMO fixtures
+    valid_id = generate_verhoeff("34567890123")
+    assert valid_id not in DEMO_REGISTRY_FIXTURES["aadhaar"]
+
+    res = await adapter.lookup("aadhaar", valid_id)
+    assert res.is_matched is False
+    assert res.is_available is True
+    assert "demo_registry_record_not_found" in res.checks_failed
+    assert "DEMO_REGISTRY_NO_RECORD" in res.risk_flags
+
+    # Full engine run: must NEVER allow arbitrary documents to become VERIFIED
+    engine = DocumentVerificationEngine(registry_adapter=adapter)
+    extraction = ExtractionResult(
+        document_type="aadhaar",
+        extracted_fields={"name": "Unmatched Person", "id_number": valid_id},
+        raw_text=f"GOVERNMENT OF INDIA AADHAAR {valid_id}"
+    )
+    engine_res = await engine.verify(extraction)
+    assert engine_res.status == DocumentVerificationStatus.NEEDS_REVIEW
+    assert engine_res.is_authentic is False
+
+
+@pytest.mark.asyncio
+async def test_staging_registry_demo_provenance_marking():
+    """
+    Test D: Demo result is clearly marked as staging/demo.
+    Never claims to be a real government registry.
+    """
+    adapter = GovernmentRegistryAdapter(mock_enabled=True)
+    res = await adapter.lookup("pan", "ABCPS1234F")
+
+    assert res.is_matched is True
+    assert res.details["source"] == "DEMO_REGISTRY"
+    assert res.details["environment"] == "staging"
+    assert res.details["is_demo_fixture"] is True
+    note = res.details["matched_record"]["verification_note"]
+    assert "NOT an authoritative government registry verification" in note
+    assert "staging demo fixture" in note
+
+
+def test_pii_sanitization_hygiene():
+    """
+    Test H: No raw sensitive identifiers are emitted.
+    Checks that redacted_fields masks the identifier correctly.
+    """
+    raw_aadhaar = "883920491122"
+    raw_pan = "ABCPS1234F"
+    raw_voter = "WBF1234567"
+    raw_dl = "KA0120180001234"
+
+    from app.documents.verification.validators.aadhaar import AadhaarValidator
+    from app.documents.verification.validators.pan import PanValidator
+    from app.documents.verification.validators.voter_id import VoterIdValidator
+    from app.documents.verification.validators.driving_licence import DrivingLicenceValidator
+
+    out_aadhaar = AadhaarValidator().validate(extracted_fields={"id_number": raw_aadhaar})
+    assert out_aadhaar.redacted_fields["id_number"] == "XXXXXXXX1122"
+    assert raw_aadhaar not in out_aadhaar.redacted_fields.values()
+
+    out_pan = PanValidator().validate(extracted_fields={"id_number": raw_pan})
+    assert out_pan.redacted_fields["id_number"] == "XXXXX1234F"
+    assert raw_pan not in out_pan.redacted_fields.values()
+
+    out_voter = VoterIdValidator().validate(extracted_fields={"id_number": raw_voter})
+    assert out_voter.redacted_fields["id_number"] == "WBF****567"
+    assert raw_voter not in out_voter.redacted_fields.values()
+
+    out_dl = DrivingLicenceValidator().validate(extracted_fields={"id_number": raw_dl})
+    assert out_dl.redacted_fields["id_number"] == "KA012018*******"
+    assert raw_dl not in out_dl.redacted_fields.values()

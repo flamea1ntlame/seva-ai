@@ -137,35 +137,71 @@ class WorkflowEngine:
             )
             latest_consent = result_consent.scalars().first()
             if latest_consent and latest_consent.status in ["PENDING", "APPROVED"]:
-                print("SNAPSHOT:", latest_consent.data_snapshot)
-                print("CURRENT:", current_data)
                 if latest_consent.data_snapshot != current_data:
                     # Invalidate
-                    latest_consent.status = "DENIED" # or some invalid status, but DENIED is safe
+                    latest_consent.status = "DENIED"
                     app.status = ApplicationState.READY_FOR_REVIEW
-                    # Log
+                    # Log audit event with sanitized details
                     await log_audit_event(
                         self.db, actor_type="SYSTEM", action="CONSENT_INVALIDATED_DATA_CHANGED",
-                        resource_type="consent", resource_id=str(latest_consent.id), user_id=app.user_id
+                        resource_type="consent", resource_id=str(latest_consent.id), user_id=app.user_id,
+                        details={"application_id": str(app.id), "reason": "Data modified after consent granted"}
                     )
                     await self.db.commit()
 
+        # Identify documents needing review or rejected
+        needs_review_docs = [
+            d for d in selected_docs
+            if d.verification_status in ["NEEDS_REVIEW", "NOT_VERIFIABLE", "MANUAL_REVIEW"]
+        ]
+        rejected_docs = [
+            d for d in selected_docs
+            if d.verification_status in ["REJECTED", "SUSPICIOUS"]
+        ]
+
         new_status = app.status
+        status_event_details: Optional[Dict[str, Any]] = None
 
         if missing_docs:
-            print("MISSING DOCS:", missing_docs)
             new_status = ApplicationState.COLLECTING_DOCUMENTS
+        elif rejected_docs:
+            # Uploaded document failed deterministic validation or was flagged suspicious
+            new_status = ApplicationState.COLLECTING_DOCUMENTS
+            status_event_details = {
+                "reason": "DOCUMENTS_REJECTED",
+                "message": "One or more uploaded documents were rejected during validation.",
+                "rejected_documents": [
+                    {"id": str(d.id), "type": d.document_type, "status": d.verification_status}
+                    for d in rejected_docs
+                ]
+            }
+        elif needs_review_docs:
+            # Document validation succeeded format/checksum, but external government verification is unavailable
+            # or requires officer review. Explicitly hold/transition to VALIDATING with clear actionable state.
+            new_status = ApplicationState.VALIDATING
+            status_event_details = {
+                "reason": "DOCUMENTS_REQUIRE_REVIEW",
+                "message": "Your document could not be independently verified with the available government verification service. It requires review before submission.",
+                "documents_needing_review": [
+                    {
+                        "id": str(d.id),
+                        "type": d.document_type,
+                        "status": d.verification_status,
+                        "reason": (d.verification_details or {}).get("failure_reason") if isinstance(d.verification_details, dict) else None
+                    }
+                    for d in needs_review_docs
+                ]
+            }
         elif has_unverified:
-            print("UNVERIFIED DOCS")
+            # Documents still pending extraction or initial intake
             new_status = ApplicationState.EXTRACTING
         elif missing_fields:
-            print("MISSING FIELDS:", missing_fields)
             new_status = ApplicationState.MISSING_INFORMATION
         elif app.status not in [ApplicationState.CONSENT_REQUIRED, ApplicationState.SUBMITTING, ApplicationState.SUBMITTED, ApplicationState.TRACKING, ApplicationState.COMPLETED]:
             new_status = ApplicationState.READY_FOR_REVIEW
 
         if new_status != app.status:
-            await self._change_status(app, new_status)
+            await self._change_status(app, new_status, status_event_details)
         else:
             self.db.add(app)
             await self.db.commit()
@@ -173,7 +209,7 @@ class WorkflowEngine:
 
         return app.status
 
-    async def _change_status(self, app: Application, new_status: str):
+    async def _change_status(self, app: Application, new_status: str, event_details: Optional[Dict[str, Any]] = None):
         old_status = app.status
         app.status = new_status
 
@@ -182,6 +218,8 @@ class WorkflowEngine:
             event_name = "APPLICATION_READY_FOR_REVIEW"
         elif new_status == ApplicationState.COLLECTING_DOCUMENTS:
             event_name = "DOCUMENTS_REQUIRED"
+        elif new_status == ApplicationState.VALIDATING:
+            event_name = "DOCUMENTS_REQUIRE_REVIEW"
 
         event = ApplicationEvent(
             application_id=app.id,
@@ -192,10 +230,14 @@ class WorkflowEngine:
         )
         self.db.add(event)
 
+        audit_details = {"previous": old_status, "new": new_status}
+        if event_details:
+            audit_details.update(event_details)
+
         await log_audit_event(
             self.db, actor_type="SYSTEM", action="WORKFLOW_STATE_CHANGE",
             resource_type="application", resource_id=str(app.id), user_id=app.user_id,
-            details={"previous": old_status, "new": new_status}
+            details=audit_details
         )
 
         await self.db.commit()
