@@ -28,9 +28,16 @@ def upgrade() -> None:
     op.add_column('consents', sa.Column('data_snapshot', sa.JSON(), nullable=False))
     op.add_column('consents', sa.Column('status', sa.String(length=50), nullable=False))
     op.add_column('consents', sa.Column('responded_at', sa.DateTime(timezone=True), nullable=True))
-    op.create_foreign_key(None, 'consents', 'applications', ['application_id'], ['id'], ondelete='CASCADE')
-    op.drop_column('consents', 'granted')
-    op.drop_column('consents', 'data_scopes')
+    bind = op.get_bind()
+    if bind.dialect.name == 'sqlite':
+        with op.batch_alter_table('consents') as batch_op:
+            batch_op.create_foreign_key('fk_consents_applications', 'applications', ['application_id'], ['id'], ondelete='CASCADE')
+            batch_op.drop_column('granted')
+            batch_op.drop_column('data_scopes')
+    else:
+        op.create_foreign_key(None, 'consents', 'applications', ['application_id'], ['id'], ondelete='CASCADE')
+        op.drop_column('consents', 'granted')
+        op.drop_column('consents', 'data_scopes')
     # ### end Alembic commands ###
 
 

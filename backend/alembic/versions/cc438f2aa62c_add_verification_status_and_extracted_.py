@@ -23,7 +23,12 @@ def upgrade() -> None:
     op.add_column('documents', sa.Column('application_id', sa.UUID(), nullable=True))
     op.add_column('documents', sa.Column('verification_status', sa.String(length=50), nullable=False))
     op.add_column('documents', sa.Column('extracted_data', sa.JSON(), nullable=True))
-    op.create_foreign_key(None, 'documents', 'applications', ['application_id'], ['id'], ondelete='SET NULL')
+    bind = op.get_bind()
+    if bind.dialect.name == 'sqlite':
+        with op.batch_alter_table('documents') as batch_op:
+            batch_op.create_foreign_key('fk_documents_applications', 'applications', ['application_id'], ['id'], ondelete='SET NULL')
+    else:
+        op.create_foreign_key(None, 'documents', 'applications', ['application_id'], ['id'], ondelete='SET NULL')
     # ### end Alembic commands ###
 
 
