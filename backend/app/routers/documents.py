@@ -11,7 +11,10 @@ from app.models import User, Document, Application
 from app.schemas import DocumentRead, VaultStats
 from app.auth import get_current_user
 from app.documents.extract import extract_document_fields
+import logging
 from sqlalchemy import func
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["Documents"])
 
@@ -273,6 +276,7 @@ async def upload_document(
 
             return doc
         except Exception as e:
+            logger.exception("Document upload/processing failed: %s", e)
             if not db_committed and sb_uploaded and sb_client:
                 try:
                     sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([object_key])

@@ -481,24 +481,58 @@ async def _run_gemini_tool_workflow(
                 return True
         return False
 
+    active_model = model_name or "gemini-3.8-flash"
+    FALLBACK_GEMINI_MODEL = "gemini-3.1-flash-lite"
+
+    def is_not_found_error(e):
+        err_msg = str(e)
+        code = getattr(e, "code", None)
+        status_code = getattr(e, "status_code", None)
+        return (
+            code == 404
+            or status_code == 404
+            or "404" in err_msg
+            or "NOT_FOUND" in err_msg
+            or "not found" in err_msg.lower()
+            or "no longer available" in err_msg.lower()
+        )
+
     @retry(
         wait=wait_exponential(multiplier=2, min=1, max=10),
         stop=stop_after_attempt(3),
         retry=retry_if_exception(is_transient_error),
         reraise=True
     )
-    async def call_gemini():
+    async def call_gemini(target_model: str):
         import asyncio
         return await asyncio.wait_for(
             client.aio.models.generate_content(
-                model=model_name,
+                model=target_model,
                 contents=messages,
                 config=config
             ),
             timeout=GEMINI_REQUEST_TIMEOUT
         )
 
-    response = await call_gemini()
+    async def execute_gemini_with_fallback():
+        nonlocal active_model
+        try:
+            res = await call_gemini(active_model)
+            logger.info("Gemini chat workflow served by model: %s", active_model)
+            return res
+        except Exception as e:
+            if is_not_found_error(e) and active_model != FALLBACK_GEMINI_MODEL:
+                logger.warning(
+                    "Gemini model '%s' failed with 404/NOT_FOUND (%s). Retrying once with fallback model '%s'...",
+                    active_model, e, FALLBACK_GEMINI_MODEL
+                )
+                active_model = FALLBACK_GEMINI_MODEL
+                res = await call_gemini(active_model)
+                logger.info("Gemini chat workflow successfully served by fallback model: %s", active_model)
+                return res
+            raise
+
+    response = await execute_gemini_with_fallback()
 
     while response.function_calls:
         messages.append(types.Content(role="model", parts=response.candidates[0].content.parts))
@@ -538,7 +572,7 @@ async def _run_gemini_tool_workflow(
             )
 
         messages.append(types.Content(role="user", parts=function_responses))
-        response = await call_gemini()
+        response = await execute_gemini_with_fallback()
 
     reply_text = response.text if response.text else ""
 

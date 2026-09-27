@@ -17,7 +17,7 @@ async def run_smoke_test():
         sys.exit(1)
     
     settings.GEMINI_API_KEY = api_key
-    settings.GEMINI_MODEL = "gemini-2.5-flash"
+    settings.GEMINI_MODEL = "gemini-3.8-flash"
     
     print(f"Starting Gemini Smoke Test with model: {settings.GEMINI_MODEL}")
     

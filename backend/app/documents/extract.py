@@ -97,20 +97,22 @@ async def extract_document_fields(file_path: str, document_type: str) -> Dict[st
             logger.info("Attempting secondary Gemini Vision fallback for document_type=%s", document_type)
             gemini_fields = await _extract_with_gemini_vision(file_path, document_type, api_key, model_name)
             if gemini_fields and any(v for v in gemini_fields.values() if v is not None):
+                served_model = gemini_fields.pop("_served_by_model", model_name)
                 # Construct formatted output with field confidences
                 formatted_fields = {}
                 for k, v in gemini_fields.items():
-                    if v is not None:
+                    if v is not None and not k.startswith("_"):
                         formatted_fields[k] = {"value": v, "confidence": 0.85}
 
                 return {
                     **gemini_fields,
                     "fields": formatted_fields,
-                    "_confidence": {k: 0.85 for k in gemini_fields},
+                    "_confidence": {k: 0.85 for k in gemini_fields if not k.startswith("_")},
                     "_confidence_score": 0.85,
                     "_ocr_status": "OCR_EXTRACTED",
                     "_ocr_engine": "gemini_vision",
-                    "_warnings": ["Extracted using secondary Gemini Vision fallback."],
+                    "_gemini_model": served_model,
+                    "_warnings": [f"Extracted using secondary Gemini Vision fallback ({served_model})."],
                 }
         except Exception as e:
             logger.warning("Secondary Gemini Vision fallback failed: %s", e)
@@ -151,13 +153,30 @@ def _format_extraction_response(parser_res: DocumentParserResult) -> Dict[str, A
     return response
 
 
+FALLBACK_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+
+
+def _is_not_found_error(e: Exception) -> bool:
+    err_msg = str(e)
+    code = getattr(e, "code", None)
+    status_code = getattr(e, "status_code", None)
+    return (
+        code == 404
+        or status_code == 404
+        or "404" in err_msg
+        or "NOT_FOUND" in err_msg
+        or "not found" in err_msg.lower()
+        or "no longer available" in err_msg.lower()
+    )
+
+
 async def _extract_with_gemini_vision(
     file_path: str,
     document_type: str,
     api_key: str,
     model_name: str
 ) -> Dict[str, Any]:
-    """Secondary fallback: Gemini Vision API for document understanding."""
+    """Secondary fallback: Gemini Vision API for document understanding with automatic 404 fallback."""
     from google import genai
     from google.genai import types
 
@@ -241,11 +260,30 @@ async def _extract_with_gemini_vision(
         temperature=0.0
     )
 
-    response = await client.aio.models.generate_content(
-        model=model_name,
-        contents=contents,
-        config=config
-    )
+    active_model = model_name or "gemini-3.8-flash"
+    try:
+        response = await client.aio.models.generate_content(
+            model=active_model,
+            contents=contents,
+            config=config
+        )
+        logger.info("Gemini Vision extraction served by model: %s", active_model)
+    except Exception as e:
+        if _is_not_found_error(e) and active_model != FALLBACK_GEMINI_MODEL:
+            logger.warning(
+                "Gemini model '%s' failed with 404/NOT_FOUND (%s). Retrying once with fallback model '%s'...",
+                active_model, e, FALLBACK_GEMINI_MODEL
+            )
+            active_model = FALLBACK_GEMINI_MODEL
+            response = await client.aio.models.generate_content(
+                model=active_model,
+                contents=contents,
+                config=config
+            )
+            logger.info("Gemini Vision extraction successfully served by fallback model: %s", active_model)
+        else:
+            raise
+
     text_resp = response.text if response.text else "{}"
 
     text_resp = text_resp.strip()
@@ -256,4 +294,7 @@ async def _extract_with_gemini_vision(
     if text_resp.endswith("```"):
         text_resp = text_resp[:-3]
 
-    return json.loads(text_resp.strip())
+    parsed = json.loads(text_resp.strip())
+    if isinstance(parsed, dict):
+        parsed["_served_by_model"] = active_model
+    return parsed
