@@ -4,9 +4,14 @@ const { resolveBackendUrl } = require(path.join(__dirname, "src/lib/backendConfi
 
 const nextConfig = {
   reactStrictMode: true,
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     const backendUrl = resolveBackendUrl();
     return [
+      {
+        source: "/api/:path*/",
+        destination: `${backendUrl}/api/:path*/`,
+      },
       {
         source: "/api/:path*",
         destination: `${backendUrl}/api/:path*`,

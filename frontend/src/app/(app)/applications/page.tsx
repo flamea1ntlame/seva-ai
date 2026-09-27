@@ -2,23 +2,26 @@
 
 import React, { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import ApplicationCard from "@/components/ApplicationCard";
 import { FileText, Loader2, Search, Plus, Compass } from "lucide-react";
 import Link from "next/link";
 import { getApplicationStatusInfo } from "@/lib/statusMapping";
 
 export default function ApplicationsPage() {
+  const { user } = useAuth();
   const [applications, setApplications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("ALL"); // ALL, ACTION_REQUIRED, ACTIVE, COMPLETED, REJECTED
 
   useEffect(() => {
+    if (!user) return;
     fetchApi("/api/applications/")
       .then((data) => setApplications(Array.isArray(data) ? data : []))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  }, [user]);
 
   const filteredApps = applications.filter((app) => {
     // Text search

@@ -2,18 +2,21 @@
 
 import React, { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Activity, Loader2, Calendar } from "lucide-react";
 
 export default function ActivityPage() {
+  const { user } = useAuth();
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!user) return;
     fetchApi("/api/audit/")
       .then(setLogs)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  }, [user]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

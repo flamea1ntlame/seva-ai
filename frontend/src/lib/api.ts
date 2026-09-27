@@ -55,7 +55,27 @@ export function getApiBaseUrl(): string {
   return "http://localhost:8000";
 }
 
+/**
+ * Normalizes an API endpoint to ensure consistent trailing slashes
+ * for collection endpoints and prevents 307/308 redirects that strip Authorization headers.
+ */
+export function normalizeEndpoint(endpoint: string): string {
+  const collectionRoutes = [
+    "/api/applications",
+    "/api/documents",
+    "/api/services",
+    "/api/audit",
+  ];
+  for (const route of collectionRoutes) {
+    if (endpoint === route) {
+      return `${route}/`;
+    }
+  }
+  return endpoint;
+}
+
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
+  const normalizedEndpoint = normalizeEndpoint(endpoint);
   const rawToken =
     typeof window !== "undefined" && typeof localStorage !== "undefined"
       ? localStorage.getItem("seva_token")
@@ -65,15 +85,39 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
       ? rawToken.trim()
       : null;
   const baseUrl = getApiBaseUrl();
-  const targetUrl = `${baseUrl}${endpoint}`;
+  const targetUrl = `${baseUrl}${normalizedEndpoint}`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(options.headers as Record<string, string>),
   };
+
+  if (options.headers) {
+    if (typeof Headers !== "undefined" && options.headers instanceof Headers) {
+      options.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+    } else if (Array.isArray(options.headers)) {
+      options.headers.forEach(([key, value]) => {
+        headers[key] = value;
+      });
+    } else {
+      Object.assign(headers, options.headers);
+    }
+  }
+
+  // Remove existing authorization header variations to ensure clean single Bearer token
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "authorization") {
+      delete headers[key];
+    }
+  }
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  if (options.body && typeof FormData !== "undefined" && options.body instanceof FormData) {
+    delete headers["Content-Type"];
   }
 
   try {

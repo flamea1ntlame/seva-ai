@@ -17,6 +17,7 @@ export default function DocumentsPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
 
   const loadDocs = useCallback(async () => {
+    if (!user) return;
     try {
       const [docsRes, statsRes] = await Promise.all([
         fetchApi("/api/documents/"),
@@ -29,11 +30,13 @@ export default function DocumentsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    loadDocs();
-  }, [loadDocs]);
+    if (user) {
+      loadDocs();
+    }
+  }, [user, loadDocs]);
 
   const handleUpload = async (file: File, type: string) => {
     if (!user) return;
