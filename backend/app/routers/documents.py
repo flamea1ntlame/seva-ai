@@ -187,7 +187,8 @@ async def upload_document(
         dup_query = await db.execute(
             select(Document).where(
                 Document.user_id == current_user.id,
-                Document.sha256_hash == sha256_hash
+                Document.sha256_hash == sha256_hash,
+                Document.document_type == document_type
             )
         )
         existing_doc = dup_query.scalars().first()
@@ -388,6 +389,39 @@ async def upload_document(
                 doc.verification_details = {"status": "OCR_EXTRACTED"}
                 await db.commit()
                 await db.refresh(doc)
+
+            # Auto-populate CitizenProfile from extracted data
+            try:
+                from app.models import CitizenProfile
+                from datetime import datetime as dt
+                prof_res = await db.execute(select(CitizenProfile).where(CitizenProfile.user_id == current_user.id))
+                profile = prof_res.scalar_one_or_none()
+                if not profile:
+                    profile = CitizenProfile(user_id=current_user.id)
+                    db.add(profile)
+
+                ext = doc.extracted_data or {}
+                if isinstance(ext, dict):
+                    if ext.get("name") and (not current_user.full_name or current_user.full_name in ("New User", "Citizen", "Test Citizen")):
+                        current_user.full_name = ext["name"]
+                    if ext.get("dob") and not profile.dob:
+                        try:
+                            profile.dob = dt.strptime(ext["dob"], "%Y-%m-%d").date()
+                        except Exception:
+                            pass
+                    if ext.get("gender") and not profile.gender:
+                        profile.gender = ext["gender"].lower()
+                    if ext.get("address") and not profile.address:
+                        profile.address = ext["address"]
+                    if ext.get("state") and not profile.state:
+                        profile.state = ext["state"]
+                    if ext.get("pincode") and not profile.pincode:
+                        profile.pincode = ext["pincode"]
+                    if ext.get("id_number") and not profile.aadhaar_hash:
+                        profile.aadhaar_hash = ext["id_number"]
+                    await db.commit()
+            except Exception as prof_err:
+                logger.warning("Could not auto-populate citizen profile: %s", prof_err)
 
             if app_uuid:
                 try:

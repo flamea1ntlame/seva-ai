@@ -89,6 +89,8 @@ DOCUMENT_SATISFACTION_RULES: Dict[str, Dict[str, Any]] = {
         "category": "PROOF_OF_ADDRESS",
         "allowed_subtypes": [
             "address_proof",
+            "aadhaar",
+            "aadhaar_card",
             "utility_bill",
             "electricity_bill",
             "water_bill",
@@ -117,13 +119,13 @@ DOCUMENT_SATISFACTION_RULES: Dict[str, Dict[str, Any]] = {
     "photograph": {
         "description": "Recent passport size photograph of the applicant",
         "category": "BIOMETRIC_PHOTO",
-        "allowed_subtypes": ["photograph", "photo", "passport_photo"],
+        "allowed_subtypes": ["photograph", "photo", "passport_photo", "biometric_photo", "portrait"],
         "prohibited_subtypes": []
     },
     "medical_declaration": {
         "description": "Physical fitness self-declaration or doctor medical certificate",
         "category": "MEDICAL_FITNESS",
-        "allowed_subtypes": ["medical_declaration", "fitness_certificate", "form_1", "form_1a"],
+        "allowed_subtypes": ["medical_declaration", "fitness_certificate", "form_1", "form_1a", "medical_certificate", "doctor_certificate"],
         "prohibited_subtypes": []
     }
 }

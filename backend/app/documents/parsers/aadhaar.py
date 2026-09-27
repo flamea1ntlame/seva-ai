@@ -148,25 +148,59 @@ class AadhaarParser(BaseDocumentParser):
                     fields["name"] = ExtractedField(value=name_val, confidence=line.confidence, source_line=txt).to_dict()
                     break
 
-            # If next line contains DOB, current line might be the citizen's name
-            if i + 1 < len(lines) and re.search(r"(DOB|Birth|जन्म)", lines[i + 1].text, re.IGNORECASE):
-                candidate = self.clean_name(txt)
-                if candidate and not re.search(r"(Government|India|Authority|UIDAI|Enrolment)", candidate, re.IGNORECASE):
-                    if len(candidate) >= 3:
-                        name_val = candidate
-                        fields["name"] = ExtractedField(value=name_val, confidence=line.confidence * 0.9, source_line=txt).to_dict()
+            # Check for name following "To"
+            if re.search(r"^To$", txt, re.IGNORECASE):
+                for next_line in lines[i + 1: i + 4]:
+                    cand = self.clean_name(next_line.text)
+                    if len(cand.split()) >= 2 and not re.search(r"(Government|India|Unique|Enrolment)", cand, re.IGNORECASE):
+                        name_val = cand
+                        fields["name"] = ExtractedField(value=name_val, confidence=0.95, source_line=next_line.text).to_dict()
                         break
+                if name_val:
+                    break
+
+            # If line preceding DOB (within 1 or 2 lines) contains candidate name
+            for offset in (1, 2):
+                if i + offset < len(lines) and re.search(r"(DOB|Birth|जन्म|ಂಕ)", lines[i + offset].text, re.IGNORECASE):
+                    candidate = self.clean_name(txt)
+                    if candidate and not re.search(r"(Government|India|Authority|UIDAI|Enrolment|Details|issued|Address|To)", candidate, re.IGNORECASE):
+                        if len(candidate) >= 3 and len(candidate.split()) >= 1:
+                            name_val = candidate
+                            fields["name"] = ExtractedField(value=name_val, confidence=line.confidence * 0.95, source_line=txt).to_dict()
+                            break
+            if name_val:
+                break
 
         # 5. Extract Address (if available, e.g. "Address:" line or postal PIN code)
         pin_match = re.search(r"\b([1-9]\d{5})\b", full_text)
         if pin_match:
-            fields["pincode"] = ExtractedField(value=pin_match.group(1), confidence=0.90).to_dict()
+            fields["pincode"] = ExtractedField(value=pin_match.group(1), confidence=0.95).to_dict()
 
-        for line in lines:
-            if re.search(r"^Address\s*[:\-]\s*", line.text, re.IGNORECASE):
-                addr_text = re.sub(r"^Address\s*[:\-]\s*", "", line.text, flags=re.IGNORECASE).strip()
-                if len(addr_text) > 5:
-                    fields["address"] = ExtractedField(value=addr_text, confidence=line.confidence).to_dict()
+        for idx, line in enumerate(lines):
+            line_str = line.text.strip()
+            if re.search(r"^Address\s*[:\-]?\s*$", line_str, re.IGNORECASE) or re.search(r"^Address\s*[:\-]\s*", line_str, re.IGNORECASE):
+                addr_text = re.sub(r"^Address\s*[:\-]\s*", "", line_str, flags=re.IGNORECASE).strip()
+                addr_parts = [addr_text] if addr_text else []
+                # Grab following lines until empty or footer/Aadhaar number
+                for next_line in lines[idx + 1: idx + 8]:
+                    nxt = next_line.text.strip()
+                    if not nxt or re.search(r"\b\d{4}\s\d{4}\s\d{4}\b", nxt) or re.search(r"(VID|help@uidai|www\.uidai|1947)", nxt, re.IGNORECASE):
+                        break
+                    addr_parts.append(nxt)
+                combined_addr = " ".join(addr_parts).strip()
+                if len(combined_addr) > 5:
+                    fields["address"] = ExtractedField(value=combined_addr, confidence=0.95).to_dict()
+                    # Also extract S/O or father name if present in address block
+                    so_match = re.search(r"(?:S/O|D/O|W/O|C/O)\s*[:\-]?\s*([A-Za-z\s]+?)(?:,|$)", combined_addr, re.IGNORECASE)
+                    if so_match:
+                        care_of = so_match.group(1).strip()
+                        if len(care_of) >= 3:
+                            fields["father_name"] = ExtractedField(value=care_of, confidence=0.92).to_dict()
+                            fields["care_of"] = fields["father_name"]
+                    # Extract state
+                    state_match = re.search(r"\b(Karnataka|Maharashtra|Tamil Nadu|Delhi|Kerala|Gujarat|Telangana|Andhra Pradesh)\b", combined_addr, re.IGNORECASE)
+                    if state_match:
+                        fields["state"] = ExtractedField(value=state_match.group(1), confidence=0.95).to_dict()
                     break
 
         # Status Assessment

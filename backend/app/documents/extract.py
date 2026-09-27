@@ -64,8 +64,13 @@ async def extract_document_fields(file_path: str, document_type: str) -> Dict[st
     except Exception as e:
         logger.warning("Primary OCR pipeline raised exception on %s: %s", ext, e)
 
+    norm_doc_type = (document_type or "").lower().strip()
+    is_photo_type = norm_doc_type in ["photograph", "photo", "passport_photo", "biometric_photo"]
+    if is_photo_type and not ocr_result:
+        ocr_result = OCRResult(text="", lines=[], average_confidence=0.95, page_count=1, engine="photo_detector")
+
     # Run document-specific parser on OCR result
-    if ocr_result and ocr_result.lines:
+    if ocr_result and (ocr_result.lines or is_photo_type):
         parser = get_parser_for_document_type(document_type)
         parser_res: DocumentParserResult = parser.parse(ocr_result)
 

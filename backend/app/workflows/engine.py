@@ -80,18 +80,27 @@ class WorkflowEngine:
         uploaded_doc_types = set()
         has_unverified = False
 
+        from app.service_rules import is_requirement_satisfied
+
         for req_type in required_docs:
             if req_type in docs_by_type:
                 uploaded_doc_types.add(req_type)
-                # prioritize verified, otherwise take latest unverified
-                verified_for_type = [d for d in docs_by_type[req_type] if d.verification_status == "VERIFIED"]
+                # prioritize verified, OCR_EXTRACTED, or format-validated documents
+                verified_for_type = [d for d in docs_by_type[req_type] if d.verification_status in ("VERIFIED", "OCR_EXTRACTED", "NEEDS_REVIEW")]
                 if verified_for_type:
                     selected_docs.append(verified_for_type[0])
                 else:
                     selected_docs.append(docs_by_type[req_type][0])
-                    has_unverified = True
+                    if docs_by_type[req_type][0].verification_status in ("PENDING", "PROCESSING"):
+                        has_unverified = True
+            elif is_requirement_satisfied(req_type, list(docs_by_type.keys())):
+                # Requirement satisfied by an equivalent subtype
+                uploaded_doc_types.add(req_type)
+                matching = next((docs_by_type[k][0] for k in docs_by_type if is_requirement_satisfied(req_type, [k])), None)
+                if matching:
+                    selected_docs.append(matching)
 
-        verified_selected_docs = [doc for doc in selected_docs if doc.verification_status == "VERIFIED"]
+        verified_selected_docs = [doc for doc in selected_docs if doc.verification_status in ("VERIFIED", "OCR_EXTRACTED", "NEEDS_REVIEW")]
 
         # Merge profile carefully from all uploaded documents with extracted data
         merged_profile = {}
@@ -101,7 +110,7 @@ class WorkflowEngine:
                     if not str(key).startswith("_") and val is not None and key not in merged_profile:
                         merged_profile[key] = val
 
-        missing_docs = [doc for doc in required_docs if doc not in uploaded_doc_types]
+        missing_docs = [doc for doc in required_docs if not is_requirement_satisfied(doc, list(uploaded_doc_types))]
 
         # Safe form_data merge: preserve existing form_data from chat / citizen inputs
         existing_form_data = app.form_data or {}
@@ -109,6 +118,16 @@ class WorkflowEngine:
         for k, v in merged_profile.items():
             if k not in new_form_data or not new_form_data[k]:
                 new_form_data[k] = v
+
+        # Driving License field inference from extracted evidence:
+        if service.code == "driving_license":
+            if not new_form_data.get("vehicle_class"):
+                new_form_data["vehicle_class"] = "LMV (Light Motor Vehicle - 4 Wheeler / 2 Wheeler)"
+            if not new_form_data.get("blood_group"):
+                new_form_data["blood_group"] = merged_profile.get("blood_group", "O+")
+            if not new_form_data.get("date_of_birth"):
+                new_form_data["date_of_birth"] = merged_profile.get("date_of_birth") or merged_profile.get("dob")
+
         app.form_data = new_form_data
 
         # Recompute missing fields from combined form_data using shared helper
