@@ -90,6 +90,20 @@ export default function ApplicationDetailPage() {
     loadData();
   }, [loadData, agentActivity]);
 
+  // Dynamic poll if any document is currently in PENDING state
+  useEffect(() => {
+    const hasPending = (application?.documents || []).some(
+      (d: any) => d.verification_status === "PENDING"
+    );
+    if (!hasPending) return;
+
+    const timer = setTimeout(() => {
+      loadData();
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [application?.documents, loadData]);
+
   const handleUploadDocument = async (file: File, docType: string) => {
     if (!user) return;
     setIsUploading(true);
@@ -119,6 +133,10 @@ export default function ApplicationDetailPage() {
       toast.success("Document uploaded successfully.");
       setShowUploadModal(false);
       await loadData();
+      // Ensure latest workflow / OCR status is reflected
+      setTimeout(() => {
+        loadData();
+      }, 2500);
     } catch (err: any) {
       toast.error(err.message || "Failed to upload document.");
       throw err;

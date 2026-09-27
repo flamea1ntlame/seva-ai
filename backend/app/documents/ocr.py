@@ -145,35 +145,27 @@ def perform_ocr(file_path: str) -> OCRResult:
                         preds = preds[0]
 
                     for pred in preds:
-                        # In PaddleOCR 3.x, outputs are dictionary items containing rec_texts, rec_scores, rec_boxes
-                        rec_texts = pred.get("rec_texts", []) if isinstance(pred, dict) else []
-                        rec_scores = pred.get("rec_scores", []) if isinstance(pred, dict) else []
-                        rec_boxes = pred.get("rec_boxes", []) if isinstance(pred, dict) else []
-
-                        # Older paddleocr layout fallback: list of [polygon, (text, score)]
-                        if not rec_texts and isinstance(pred, (list, tuple)):
-                            if len(pred) == 2 and isinstance(pred[1], (list, tuple)):
-                                poly, text_score = pred
-                                txt = text_score[0] if len(text_score) > 0 else ""
-                                score = float(text_score[1]) if len(text_score) > 1 else 0.8
-                                xs = [pt[0] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
-                                ys = [pt[1] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
-                                bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+                        if isinstance(pred, dict):
+                            rec_texts = pred.get("rec_texts", [])
+                            rec_scores = pred.get("rec_scores", [])
+                            rec_boxes = pred.get("rec_boxes", [])
+                            for idx, txt in enumerate(rec_texts):
+                                score = float(rec_scores[idx]) if idx < len(rec_scores) else 0.8
+                                bbox: List[int] = []
+                                if idx < len(rec_boxes):
+                                    b = rec_boxes[idx]
+                                    if hasattr(b, "tolist"):
+                                        b = b.tolist()
+                                    if isinstance(b, list) and len(b) >= 4:
+                                        bbox = [int(v) for v in b[:4]]
                                 page_lines.append(OCRLine(text=str(txt).strip(), confidence=score, bbox=bbox, page=page_idx))
-                                xs = [pt[0] for pt in poly]
-                                ys = [pt[1] for pt in poly]
-                                bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
-                                page_lines.append(OCRLine(text=txt.strip(), confidence=float(score), bbox=bbox, page=page_idx))
-                    else:
-                        for idx, txt in enumerate(rec_texts):
-                            score = float(rec_scores[idx]) if idx < len(rec_scores) else 0.8
-                            bbox: List[int] = []
-                            if idx < len(rec_boxes):
-                                b = rec_boxes[idx]
-                                if hasattr(b, "tolist"):
-                                    b = b.tolist()
-                                if isinstance(b, list) and len(b) >= 4:
-                                    bbox = [int(v) for v in b[:4]]
+                        elif isinstance(pred, (list, tuple)) and len(pred) == 2 and isinstance(pred[1], (list, tuple)):
+                            poly, text_score = pred
+                            txt = text_score[0] if len(text_score) > 0 else ""
+                            score = float(text_score[1]) if len(text_score) > 1 else 0.8
+                            xs = [pt[0] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
+                            ys = [pt[1] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
+                            bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
                             page_lines.append(OCRLine(text=str(txt).strip(), confidence=score, bbox=bbox, page=page_idx))
             except Exception as e:
                 logger.warning(f"PaddleOCR prediction failed on page {page_idx}: {e}")

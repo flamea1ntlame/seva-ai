@@ -100,8 +100,9 @@ async def get_application(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    from app.models import Document
-    
+    from app.models import Document, application_documents
+    from sqlalchemy import or_
+
     result = await db.execute(
         select(Application)
         .options(selectinload(Application.service), selectinload(Application.linked_documents))
@@ -115,7 +116,26 @@ async def get_application(
     if app.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this application")
         
-    documents = app.linked_documents
+    # Get all documents for this application: via application_documents table OR Document.application_id
+    doc_result = await db.execute(
+        select(Document).where(
+            or_(
+                Document.application_id == application_id,
+                Document.id.in_(
+                    select(application_documents.c.document_id).where(
+                        application_documents.c.application_id == application_id
+                    )
+                )
+            )
+        ).order_by(Document.created_at.desc())
+    )
+    app_docs = doc_result.scalars().all()
+    seen_ids = set()
+    documents = []
+    for d in list(app_docs) + list(app.linked_documents or []):
+        if d.id not in seen_ids:
+            seen_ids.add(d.id)
+            documents.append(d)
     
     app_data = {
         "id": app.id,
@@ -217,7 +237,25 @@ async def preview_application(
     if app.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    documents = app.linked_documents
+    doc_result = await db.execute(
+        select(Document).where(
+            or_(
+                Document.application_id == application_id,
+                Document.id.in_(
+                    select(application_documents.c.document_id).where(
+                        application_documents.c.application_id == application_id
+                    )
+                )
+            )
+        ).order_by(Document.created_at.desc())
+    )
+    app_docs = doc_result.scalars().all()
+    seen_ids = set()
+    documents = []
+    for d in list(app_docs) + list(app.linked_documents or []):
+        if d.id not in seen_ids:
+            seen_ids.add(d.id)
+            documents.append(d)
     
     # 3. Fetch pending consent
     consent_result = await db.execute(

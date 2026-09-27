@@ -191,12 +191,40 @@ async def upload_document(
             )
         )
         existing_doc = dup_query.scalars().first()
-        if existing_doc:
-            # If uploaded for a new application and the existing record has no application, associate it
-            if app_uuid and not existing_doc.application_id:
-                existing_doc.application_id = app_uuid
+        is_unprocessed = existing_doc and (
+            existing_doc.verification_status == "PENDING"
+            or existing_doc.extracted_data is None
+        )
+
+        if existing_doc and not is_unprocessed:
+            # Already extracted & verified, associate with application if needed
+            if app_uuid:
+                if not existing_doc.application_id:
+                    existing_doc.application_id = app_uuid
+                try:
+                    from app.models import application_documents
+                    link_exists = await db.execute(
+                        select(application_documents.c.document_id).where(
+                            application_documents.c.application_id == app_uuid,
+                            application_documents.c.document_id == existing_doc.id
+                        )
+                    )
+                    if not link_exists.scalar_one_or_none():
+                        await db.execute(
+                            application_documents.insert().values(
+                                application_id=app_uuid,
+                                document_id=existing_doc.id
+                            )
+                        )
+                except Exception as link_err:
+                    logger.warning("Error linking duplicate doc: %s", link_err)
                 await db.commit()
                 await db.refresh(existing_doc)
+                try:
+                    from app.workflows.engine import WorkflowEngine
+                    await WorkflowEngine(db).advance_application(app_uuid)
+                except Exception:
+                    pass
             return existing_doc
 
         file_size = total_bytes
@@ -209,31 +237,59 @@ async def upload_document(
         try:
             # Upload to Supabase Storage if configured
             if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
-                from supabase import create_client
-                sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
-                sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).upload(
-                    file=tmp_path,
-                    path=object_key
-                )
-                sb_uploaded = True
+                try:
+                    from supabase import create_client
+                    sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+                    sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).upload(
+                        file=tmp_path,
+                        path=object_key
+                    )
+                    sb_uploaded = True
+                except Exception as sb_err:
+                    logger.warning("Supabase storage upload failed: %s", sb_err)
 
-            # Initial Document row with status PENDING
-            doc = Document(
-                id=uuid.UUID(file_id),
-                user_id=current_user.id,
-                application_id=app_uuid,
-                document_type=document_type,
-                title=file.filename or document_type,
-                file_path=object_key,
-                file_size=file_size,
-                mime_type=detected_mime,
-                sha256_hash=sha256_hash,
-                verification_details=None,
-                verified=False,
-                verification_status="PENDING",
-                extracted_data=None
-            )
-            db.add(doc)
+            if not existing_doc:
+                # Initial Document row with status PENDING
+                doc = Document(
+                    id=uuid.UUID(file_id),
+                    user_id=current_user.id,
+                    application_id=app_uuid,
+                    document_type=document_type,
+                    title=file.filename or document_type,
+                    file_path=object_key,
+                    file_size=file_size,
+                    mime_type=detected_mime,
+                    sha256_hash=sha256_hash,
+                    verification_details=None,
+                    verified=False,
+                    verification_status="PENDING",
+                    extracted_data=None
+                )
+                db.add(doc)
+            else:
+                doc = existing_doc
+                if app_uuid:
+                    doc.application_id = app_uuid
+
+            if app_uuid:
+                try:
+                    from app.models import application_documents
+                    link_exists = await db.execute(
+                        select(application_documents.c.document_id).where(
+                            application_documents.c.application_id == app_uuid,
+                            application_documents.c.document_id == doc.id
+                        )
+                    )
+                    if not link_exists.scalar_one_or_none():
+                        await db.execute(
+                            application_documents.insert().values(
+                                application_id=app_uuid,
+                                document_id=doc.id
+                            )
+                        )
+                except Exception as link_err:
+                    logger.warning("Error linking doc in application_documents: %s", link_err)
+
             await db.commit()
             db_committed = True
             await db.refresh(doc)
@@ -250,7 +306,18 @@ async def upload_document(
                     "_warnings": [f"Extraction error: {str(extract_err)}"],
                     "fields": {},
                 }
-            doc.extracted_data = extracted
+
+            import json
+
+            def _clean_json_val(val: Any) -> Any:
+                if val is None:
+                    return None
+                try:
+                    return json.loads(json.dumps(val, default=str))
+                except Exception:
+                    return {}
+
+            doc.extracted_data = _clean_json_val(extracted)
 
             # -----------------------------------------------------------------
             # RUN COMPLETE VERIFICATION ENGINE
@@ -264,11 +331,20 @@ async def upload_document(
                 if not raw_txt and "fields" in extracted and isinstance(extracted["fields"], dict):
                     raw_txt = " ".join(str(f.get("value", "")) for f in extracted["fields"].values() if isinstance(f, dict))
 
+            conf_val = 0.95
+            if isinstance(extracted, dict):
+                try:
+                    conf_raw = extracted.get("confidence") or extracted.get("_confidence_score")
+                    if conf_raw is not None:
+                        conf_val = float(conf_raw)
+                except Exception:
+                    conf_val = 0.95
+
             extraction_contract = ExtractionResult(
                 document_type=document_type,
                 extracted_fields=extracted if isinstance(extracted, dict) else {},
                 raw_text=raw_txt,
-                confidence=float(extracted.get("confidence", 0.95)) if isinstance(extracted, dict) else 0.95
+                confidence=conf_val
             )
 
             try:
@@ -284,7 +360,7 @@ async def upload_document(
                 doc.verification_status = verif_status
                 # Never claim VERIFIED from OCR/supporting checks alone
                 doc.verified = verification_result.is_authentic and verif_status == "VERIFIED"
-                doc.verification_details = verification_result.model_dump(mode="json")
+                doc.verification_details = _clean_json_val(verification_result.model_dump(mode="json"))
             except Exception as verif_err:
                 logger.warning("Verification engine error: %s", verif_err)
                 ocr_status = extracted.get("_ocr_status", "OCR_EXTRACTED") if isinstance(extracted, dict) else "OCR_EXTRACTED"
@@ -298,8 +374,17 @@ async def upload_document(
                 }
 
             # Persist explicit verification status & rich structured evidence
-            await db.commit()
-            await db.refresh(doc)
+            try:
+                await db.commit()
+                await db.refresh(doc)
+            except Exception as commit_err:
+                logger.error("Commit error on verification save: %s", commit_err)
+                await db.rollback()
+                doc.verification_status = "OCR_EXTRACTED"
+                doc.extracted_data = {}
+                doc.verification_details = {"status": "OCR_EXTRACTED"}
+                await db.commit()
+                await db.refresh(doc)
 
             if app_uuid:
                 try:
@@ -309,8 +394,16 @@ async def upload_document(
                     logger.warning("Workflow advance_application failed for %s: %s", app_uuid, workflow_err)
 
             return doc
+        except HTTPException:
+            raise
         except Exception as e:
             logger.exception("Document upload/processing failed: %s", e)
+            if db_committed:
+                try:
+                    await db.refresh(doc)
+                    return doc
+                except Exception:
+                    pass
             if not db_committed and sb_uploaded and sb_client:
                 try:
                     sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([object_key])
@@ -318,7 +411,7 @@ async def upload_document(
                     pass
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document processing failed."
+                detail=f"Document processing failed: {str(e)}"
             )
     finally:
         if os.path.exists(tmp_path):
