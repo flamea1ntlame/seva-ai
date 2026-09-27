@@ -93,12 +93,12 @@ class WorkflowEngine:
 
         verified_selected_docs = [doc for doc in selected_docs if doc.verification_status == "VERIFIED"]
 
-        # Merge profile carefully
+        # Merge profile carefully from all uploaded documents with extracted data
         merged_profile = {}
-        for doc in verified_selected_docs:
+        for doc in selected_docs:
             if doc.extracted_data and isinstance(doc.extracted_data, dict):
                 for key, val in doc.extracted_data.items():
-                    if val is not None and key not in merged_profile:
+                    if not str(key).startswith("_") and val is not None and key not in merged_profile:
                         merged_profile[key] = val
 
         missing_docs = [doc for doc in required_docs if doc not in uploaded_doc_types]

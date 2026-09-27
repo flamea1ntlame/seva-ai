@@ -266,10 +266,16 @@ async def upload_document(
                     extracted_data=None
                 )
                 db.add(doc)
+                await db.commit()
+                db_committed = True
+                await db.refresh(doc)
             else:
                 doc = existing_doc
-                if app_uuid:
+                if app_uuid and not doc.application_id:
                     doc.application_id = app_uuid
+                    await db.commit()
+                    await db.refresh(doc)
+                db_committed = True
 
             if app_uuid:
                 try:
@@ -287,12 +293,9 @@ async def upload_document(
                                 document_id=doc.id
                             )
                         )
+                        await db.commit()
                 except Exception as link_err:
                     logger.warning("Error linking doc in application_documents: %s", link_err)
-
-            await db.commit()
-            db_committed = True
-            await db.refresh(doc)
 
             # Run extraction engine
             try:
@@ -400,10 +403,17 @@ async def upload_document(
             logger.exception("Document upload/processing failed: %s", e)
             if db_committed:
                 try:
+                    doc.verification_status = "NEEDS_REVIEW"
+                    doc.verification_details = {"status": "NEEDS_REVIEW", "error": str(e)}
+                    await db.commit()
                     await db.refresh(doc)
                     return doc
                 except Exception:
-                    pass
+                    try:
+                        await db.refresh(doc)
+                        return doc
+                    except Exception:
+                        pass
             if not db_committed and sb_uploaded and sb_client:
                 try:
                     sb_client.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([object_key])
