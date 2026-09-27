@@ -30,7 +30,11 @@ function resolveBackendUrl(env = process.env) {
     // 1. Direct priority check
     for (const key of targetKeys) {
       if (typeof env[key] === "string" && env[key].trim()) {
-        rawUrl = env[key].trim();
+        const candidate = env[key].trim();
+        if (key === "RENDER_EXTERNAL_URL" && (candidate.includes("frontend") || candidate.includes("vercel") || (env.RENDER_SERVICE_NAME && candidate.includes(env.RENDER_SERVICE_NAME)))) {
+          continue;
+        }
+        rawUrl = candidate;
         break;
       }
     }
@@ -41,7 +45,11 @@ function resolveBackendUrl(env = process.env) {
         const normalizedKey = k.trim().toUpperCase();
         if (targetKeys.includes(normalizedKey)) {
           if (typeof env[k] === "string" && env[k].trim()) {
-            rawUrl = env[k].trim();
+            const candidate = env[k].trim();
+            if (normalizedKey === "RENDER_EXTERNAL_URL" && (candidate.includes("frontend") || candidate.includes("vercel") || (env.RENDER_SERVICE_NAME && candidate.includes(env.RENDER_SERVICE_NAME)))) {
+              continue;
+            }
+            rawUrl = candidate;
             break;
           }
         }

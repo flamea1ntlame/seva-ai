@@ -105,15 +105,19 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     }
   }
 
-  // Remove existing authorization header variations to ensure clean single Bearer token
+  // Extract explicit authorization if passed in options and remove case variations
+  let explicitAuth: string | undefined = undefined;
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === "authorization") {
+      explicitAuth = headers[key];
       delete headers[key];
     }
   }
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  } else if (explicitAuth) {
+    headers["Authorization"] = explicitAuth;
   }
 
   if (options.body && typeof FormData !== "undefined" && options.body instanceof FormData) {
