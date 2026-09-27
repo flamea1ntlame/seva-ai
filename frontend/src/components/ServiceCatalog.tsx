@@ -149,7 +149,7 @@ export default function ServiceCatalog({
         if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
           window.dispatchEvent(new CustomEvent("seva:session_expired"));
         }
-        router.push("/login?session_expired=1");
+        router.replace("/login");
         return;
       }
 

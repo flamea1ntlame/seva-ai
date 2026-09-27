@@ -77,8 +77,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Listen to session expired event from fetchApi
     const handleExpired = () => {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("seva_token");
+      }
       setUser(null);
-      router.push("/login?session_expired=1");
+      router.replace("/login");
     };
 
     // Multi-tab logout synchronization:
@@ -87,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event.key === "seva_token") {
         if (!event.newValue) {
           setUser(null);
-          router.push("/login");
+          router.replace("/login");
         } else if (event.newValue !== event.oldValue) {
           refreshUser().catch(() => {});
         }
@@ -95,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const currentToken = typeof window !== "undefined" ? localStorage.getItem("seva_token") : null;
         if (!currentToken) {
           setUser(null);
-          router.push("/login");
+          router.replace("/login");
         }
       }
     };
@@ -120,25 +123,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error("Invalid response: missing access token from server.");
       }
 
+      // Store the NEW access_token as seva_token
       if (typeof window !== "undefined") {
         localStorage.setItem("seva_token", data.access_token);
       }
 
-      // Verify authenticated user before navigating to dashboard
+      // Immediately validate the NEW token with /api/auth/me
       let verifiedUser: User | null = null;
       try {
         verifiedUser = await refreshUser();
       } catch (verifyErr: any) {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("seva_token");
+        }
+        setUser(null);
         throw new Error(
           verifyErr?.message || "Failed to verify citizen session after login."
         );
       }
 
       if (!verifiedUser) {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("seva_token");
+        }
+        setUser(null);
         throw new Error("Unable to establish verified citizen session.");
       }
 
-      router.push("/dashboard");
+      router.replace("/dashboard");
     } catch (err) {
       setLoading(false);
       throw err;

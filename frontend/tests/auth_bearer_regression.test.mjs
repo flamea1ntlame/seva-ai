@@ -169,4 +169,130 @@ test("Authentication Regression: Authenticated requests send Authorization: Bear
     await fetchApi("/api/services/");
     assert.equal(capturedHeaders["Authorization"], undefined);
   });
+
+  await t.test("6. On 401 from /api/auth/me, clears stale seva_token and dispatches session_expired event", async () => {
+    const staleToken = "expired_stale_token_abc";
+    const storage = new Map([["seva_token", staleToken]]);
+
+    let expiredDispatched = false;
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      location: { hostname: "localhost" },
+      dispatchEvent: (event) => {
+        if (event?.type === "seva:session_expired") {
+          expiredDispatched = true;
+        }
+        return true;
+      },
+    };
+
+    globalThis.fetch = async (url) => {
+      if (url.includes("/api/auth/me")) {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ detail: "Could not validate credentials" }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    let caughtError = null;
+    try {
+      await fetchApi("/api/auth/me");
+    } catch (err) {
+      caughtError = err;
+    }
+
+    assert.ok(caughtError, "Expected ApiError on 401 from /api/auth/me");
+    assert.equal(caughtError.status, 401);
+    assert.equal(storage.get("seva_token"), undefined, "Stale seva_token must be removed from localStorage on 401 from /api/auth/me");
+    assert.equal(expiredDispatched, true, "seva:session_expired event must be dispatched on 401 from /api/auth/me");
+  });
+
+  await t.test("7. Complete fresh login flow: stores new access_token as seva_token and immediately validates with /api/auth/me", async () => {
+    // 1. Initial state: stale token in storage
+    const storage = new Map([["seva_token", "old_expired_token"]]);
+    let currentUser = { id: "old-user" };
+    let redirectedRoute = null;
+
+    globalThis.localStorage = {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    };
+
+    const mockRouter = {
+      replace: (url) => { redirectedRoute = url; },
+      push: (url) => { redirectedRoute = url; },
+    };
+
+    globalThis.window = {
+      localStorage: globalThis.localStorage,
+      location: { hostname: "localhost" },
+      dispatchEvent: (event) => {
+        if (event?.type === "seva:session_expired") {
+          currentUser = null;
+          storage.delete("seva_token");
+          mockRouter.replace("/login");
+        }
+        return true;
+      },
+    };
+
+    const freshAccessToken = "fresh_jwt_access_token_999";
+    const freshUserData = { id: "new-citizen-id-456", email: "citizen@example.com", full_name: "Citizen Test" };
+    const meHeadersSent = [];
+
+    globalThis.fetch = async (url, opts) => {
+      if (url.includes("/api/auth/me")) {
+        const authHeader = opts?.headers?.Authorization || opts?.headers?.authorization;
+        meHeadersSent.push(authHeader);
+        if (authHeader === `Bearer ${freshAccessToken}`) {
+          return { ok: true, status: 200, json: async () => freshUserData };
+        }
+        return { ok: false, status: 401, json: async () => ({ detail: "Could not validate credentials" }) };
+      }
+      if (url.includes("/api/auth/login")) {
+        return { ok: true, status: 200, json: async () => ({ access_token: freshAccessToken, token_type: "bearer" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    // 2. Initial validation with stale token fails with 401
+    try {
+      await fetchApi("/api/auth/me");
+    } catch {}
+
+    assert.equal(storage.get("seva_token"), undefined, "Stale token must be cleared");
+    assert.equal(currentUser, null, "User state must be cleared");
+    assert.equal(redirectedRoute, "/login", "Clean redirect to /login must occur");
+
+    // 3. Citizen logs in: /api/auth/login returns fresh token
+    const loginData = await fetchApi("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: "citizen@example.com", password: "password123" }),
+    });
+
+    assert.equal(loginData.access_token, freshAccessToken);
+
+    // 4. Store the NEW access_token as seva_token
+    globalThis.localStorage.setItem("seva_token", loginData.access_token);
+    assert.equal(globalThis.localStorage.getItem("seva_token"), freshAccessToken);
+
+    // 5. Immediately validate the NEW token with /api/auth/me
+    const verifiedUser = await fetchApi("/api/auth/me");
+    currentUser = verifiedUser;
+    mockRouter.replace("/dashboard");
+
+    assert.equal(currentUser.id, "new-citizen-id-456");
+    assert.equal(redirectedRoute, "/dashboard");
+    assert.equal(meHeadersSent[meHeadersSent.length - 1], `Bearer ${freshAccessToken}`);
+  });
 });

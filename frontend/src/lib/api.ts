@@ -350,8 +350,12 @@ export async function handleSessionValidationOn401(
   if (!is401) return true;
 
   const isValid = await validateSession();
-  if (!isValid && router && typeof router.push === "function") {
-    router.push("/login?session_expired=1");
+  if (!isValid && router) {
+    if (typeof router.replace === "function") {
+      router.replace("/login");
+    } else if (typeof router.push === "function") {
+      router.push("/login");
+    }
   }
   return isValid;
 }
