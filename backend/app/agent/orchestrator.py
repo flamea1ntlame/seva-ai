@@ -481,8 +481,8 @@ async def _run_gemini_tool_workflow(
                 return True
         return False
 
-    active_model = model_name or "gemini-3.8-flash"
-    FALLBACK_GEMINI_MODEL = "gemini-3.1-flash-lite"
+    active_model = model_name or "gemini-2.0-flash"
+    FALLBACK_GEMINI_MODEL = "gemini-1.5-flash"
 
     def is_not_found_error(e):
         err_msg = str(e)

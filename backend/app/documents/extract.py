@@ -153,7 +153,7 @@ def _format_extraction_response(parser_res: DocumentParserResult) -> Dict[str, A
     return response
 
 
-FALLBACK_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+FALLBACK_GEMINI_MODEL: str = "gemini-1.5-flash"
 
 
 def _is_not_found_error(e: Exception) -> bool:
@@ -260,7 +260,7 @@ async def _extract_with_gemini_vision(
         temperature=0.0
     )
 
-    active_model = model_name or "gemini-3.8-flash"
+    active_model = model_name or "gemini-2.0-flash"
     try:
         response = await client.aio.models.generate_content(
             model=active_model,

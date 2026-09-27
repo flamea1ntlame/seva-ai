@@ -83,12 +83,19 @@ class OCREngine:
         cls._last_init_attempt = now
         try:
             from paddleocr import PaddleOCR
-            cls._paddle_instance = PaddleOCR(
-                lang="en",
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
+            try:
+                cls._paddle_instance = PaddleOCR(
+                    lang="en",
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                )
+            except (TypeError, Exception):
+                cls._paddle_instance = PaddleOCR(
+                    lang="en",
+                    use_angle_cls=False,
+                    show_log=False,
+                )
             logger.info("PaddleOCR engine initialized successfully.")
             return cls._paddle_instance
         except Exception as e:
@@ -124,18 +131,35 @@ def perform_ocr(file_path: str) -> OCRResult:
         # 3. Primary OCR: Pretrained PaddleOCR
         if paddle_ocr:
             try:
-                preds = paddle_ocr.predict(np_img)
-                for pred in preds:
-                    # In PaddleOCR 3.x, outputs are dictionary items containing rec_texts, rec_scores, rec_boxes
-                    rec_texts = pred.get("rec_texts", []) if isinstance(pred, dict) else []
-                    rec_scores = pred.get("rec_scores", []) if isinstance(pred, dict) else []
-                    rec_boxes = pred.get("rec_boxes", []) if isinstance(pred, dict) else []
+                preds = None
+                if hasattr(paddle_ocr, "predict"):
+                    try:
+                        preds = paddle_ocr.predict(np_img)
+                    except Exception:
+                        preds = None
+                if preds is None and hasattr(paddle_ocr, "ocr"):
+                    preds = paddle_ocr.ocr(np_img, cls=False)
 
-                    # Older paddleocr layout fallback: list of [polygon, (text, score)]
-                    if not rec_texts and isinstance(pred, list):
-                        for item in pred:
-                            if isinstance(item, list) and len(item) == 2:
-                                poly, (txt, score) = item
+                if preds is not None:
+                    if isinstance(preds, list) and len(preds) == 1 and isinstance(preds[0], list):
+                        preds = preds[0]
+
+                    for pred in preds:
+                        # In PaddleOCR 3.x, outputs are dictionary items containing rec_texts, rec_scores, rec_boxes
+                        rec_texts = pred.get("rec_texts", []) if isinstance(pred, dict) else []
+                        rec_scores = pred.get("rec_scores", []) if isinstance(pred, dict) else []
+                        rec_boxes = pred.get("rec_boxes", []) if isinstance(pred, dict) else []
+
+                        # Older paddleocr layout fallback: list of [polygon, (text, score)]
+                        if not rec_texts and isinstance(pred, (list, tuple)):
+                            if len(pred) == 2 and isinstance(pred[1], (list, tuple)):
+                                poly, text_score = pred
+                                txt = text_score[0] if len(text_score) > 0 else ""
+                                score = float(text_score[1]) if len(text_score) > 1 else 0.8
+                                xs = [pt[0] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
+                                ys = [pt[1] for pt in poly] if isinstance(poly, (list, tuple)) else [0, 0]
+                                bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+                                page_lines.append(OCRLine(text=str(txt).strip(), confidence=score, bbox=bbox, page=page_idx))
                                 xs = [pt[0] for pt in poly]
                                 ys = [pt[1] for pt in poly]
                                 bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]

@@ -239,7 +239,17 @@ async def upload_document(
             await db.refresh(doc)
 
             # Run extraction engine
-            extracted = await extract_document_fields(tmp_path, document_type)
+            try:
+                extracted = await extract_document_fields(tmp_path, document_type)
+            except Exception as extract_err:
+                logger.warning("extract_document_fields error: %s", extract_err)
+                extracted = {
+                    "_ocr_status": "NEEDS_REVIEW",
+                    "_ocr_engine": "none",
+                    "_confidence_score": 0.0,
+                    "_warnings": [f"Extraction error: {str(extract_err)}"],
+                    "fields": {},
+                }
             doc.extracted_data = extracted
 
             # -----------------------------------------------------------------
@@ -248,31 +258,55 @@ async def upload_document(
             from app.documents.schemas import ExtractionResult
             from app.documents.verification.engine import DocumentVerificationEngine
 
+            raw_txt = None
+            if isinstance(extracted, dict):
+                raw_txt = str(extracted.get("extracted_text") or "")
+                if not raw_txt and "fields" in extracted and isinstance(extracted["fields"], dict):
+                    raw_txt = " ".join(str(f.get("value", "")) for f in extracted["fields"].values() if isinstance(f, dict))
+
             extraction_contract = ExtractionResult(
                 document_type=document_type,
                 extracted_fields=extracted if isinstance(extracted, dict) else {},
-                raw_text=str(extracted.get("extracted_text") or "") if isinstance(extracted, dict) else None,
+                raw_text=raw_txt,
                 confidence=float(extracted.get("confidence", 0.95)) if isinstance(extracted, dict) else 0.95
             )
 
-            verifier = DocumentVerificationEngine()
-            verification_result = await verifier.verify(
-                extraction=extraction_contract,
-                file_path=tmp_path,
-                sha256_hash=sha256_hash
-            )
+            try:
+                verifier = DocumentVerificationEngine()
+                verification_result = await verifier.verify(
+                    extraction=extraction_contract,
+                    file_path=tmp_path,
+                    sha256_hash=sha256_hash
+                )
+                verif_status = verification_result.status.value
+                if verif_status == "EXTRACTED":
+                    verif_status = "OCR_EXTRACTED"
+                doc.verification_status = verif_status
+                # Never claim VERIFIED from OCR/supporting checks alone
+                doc.verified = verification_result.is_authentic and verif_status == "VERIFIED"
+                doc.verification_details = verification_result.model_dump(mode="json")
+            except Exception as verif_err:
+                logger.warning("Verification engine error: %s", verif_err)
+                ocr_status = extracted.get("_ocr_status", "OCR_EXTRACTED") if isinstance(extracted, dict) else "OCR_EXTRACTED"
+                doc.verification_status = ocr_status
+                doc.verified = False
+                doc.verification_details = {
+                    "status": ocr_status,
+                    "is_authentic": False,
+                    "methods": ["VISUAL_ANALYSIS"],
+                    "risk_flags": ["VERIFICATION_FALLBACK"],
+                }
 
             # Persist explicit verification status & rich structured evidence
-            doc.verification_status = verification_result.status.value
-            doc.verified = verification_result.is_authentic
-            doc.verification_details = verification_result.model_dump()
-
             await db.commit()
             await db.refresh(doc)
 
             if app_uuid:
-                from app.workflows.engine import WorkflowEngine
-                await WorkflowEngine(db).advance_application(app_uuid)
+                try:
+                    from app.workflows.engine import WorkflowEngine
+                    await WorkflowEngine(db).advance_application(app_uuid)
+                except Exception as workflow_err:
+                    logger.warning("Workflow advance_application failed for %s: %s", app_uuid, workflow_err)
 
             return doc
         except Exception as e:
@@ -348,22 +382,42 @@ async def reverify_document(
     from app.documents.schemas import ExtractionResult
     from app.documents.verification.engine import DocumentVerificationEngine
 
+    raw_txt = None
+    if isinstance(doc.extracted_data, dict):
+        raw_txt = str(doc.extracted_data.get("extracted_text") or "")
+        if not raw_txt and "fields" in doc.extracted_data and isinstance(doc.extracted_data["fields"], dict):
+            raw_txt = " ".join(str(f.get("value", "")) for f in doc.extracted_data["fields"].values() if isinstance(f, dict))
+
     extraction_contract = ExtractionResult(
         document_type=doc.document_type,
         extracted_fields=doc.extracted_data if isinstance(doc.extracted_data, dict) else {},
-        raw_text=str(doc.extracted_data.get("extracted_text") or "") if isinstance(doc.extracted_data, dict) else None,
+        raw_text=raw_txt,
         confidence=0.95
     )
 
-    verifier = DocumentVerificationEngine()
-    verification_result = await verifier.verify(
-        extraction=extraction_contract,
-        sha256_hash=doc.sha256_hash
-    )
-
-    doc.verification_status = verification_result.status.value
-    doc.verified = verification_result.is_authentic
-    doc.verification_details = verification_result.model_dump()
+    try:
+        verifier = DocumentVerificationEngine()
+        verification_result = await verifier.verify(
+            extraction=extraction_contract,
+            sha256_hash=doc.sha256_hash
+        )
+        verif_status = verification_result.status.value
+        if verif_status == "EXTRACTED":
+            verif_status = "OCR_EXTRACTED"
+        doc.verification_status = verif_status
+        doc.verified = verification_result.is_authentic and verif_status == "VERIFIED"
+        doc.verification_details = verification_result.model_dump(mode="json")
+    except Exception as verif_err:
+        logger.warning("reverify_document error: %s", verif_err)
+        ocr_status = doc.extracted_data.get("_ocr_status", "OCR_EXTRACTED") if isinstance(doc.extracted_data, dict) else "OCR_EXTRACTED"
+        doc.verification_status = ocr_status
+        doc.verified = False
+        doc.verification_details = {
+            "status": ocr_status,
+            "is_authentic": False,
+            "methods": ["VISUAL_ANALYSIS"],
+            "risk_flags": ["VERIFICATION_FALLBACK"],
+        }
 
     await db.commit()
     await db.refresh(doc)

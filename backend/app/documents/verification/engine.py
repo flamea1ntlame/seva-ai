@@ -74,7 +74,7 @@ class DocumentVerificationEngine:
                 "parent_identity_proof", "parent_guardian_consent", "learner_licence"
             ):
                 return DocumentVerificationResult(
-                    status=DocumentVerificationStatus.EXTRACTED,
+                    status=DocumentVerificationStatus.OCR_EXTRACTED,
                     is_authentic=False,
                     methods=methods,
                     verified_at=timestamp,
