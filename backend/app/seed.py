@@ -10,7 +10,7 @@ from app.auth import get_password_hash
 
 async def seed_data():
     async with AsyncSessionLocal() as db:
-        print("🌱 Starting database seed...")
+        print("[*] Starting database seed...")
 
         # 1. Check or Create Demo Citizen User
         result = await db.execute(select(User).where(User.email == "citizen@example.com"))
@@ -39,9 +39,9 @@ async def seed_data():
                 category="General",
             )
             db.add(profile)
-            print("✅ Created demo citizen: citizen@example.com / password123")
+            print("[+] Created demo citizen: citizen@example.com / password123")
         else:
-            print("ℹ️ Demo citizen already exists.")
+            print("[-] Demo citizen already exists.")
 
         # 2. Seed/Update Exactly 3 Services per Phase 2 spec
         services_to_seed = [
@@ -93,15 +93,15 @@ async def seed_data():
                     is_active=True,
                 )
                 db.add(service)
-                print(f"✅ Created service: {s_data['code']}")
+                print(f"[+] Created service: {s_data['code']}")
             else:
                 service.department = s_data["department"]
                 service.required_documents = s_data["required_documents"]
                 service.required_fields = s_data["required_fields"]
-                print(f"ℹ️ Updated service spec: {s_data['code']}")
+                print(f"[-] Updated service spec: {s_data['code']}")
 
         await db.commit()
-        print("🚀 Seeding completed successfully!")
+        print("[+] Seeding completed successfully!")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import os
-from typing import List, Union
+from typing import List, Union, Any, Optional
 from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api"
 
-    DATABASE_URL: str = "postgresql+asyncpg://anseljustin@localhost:5432/seva_db"
-    SYNC_DATABASE_URL: str = "postgresql://anseljustin@localhost:5432/seva_db"
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///seva_local.db")
+    SYNC_DATABASE_URL: str = os.getenv("SYNC_DATABASE_URL", "sqlite:///seva_local.db")
 
     ENVIRONMENT: str = "development"
     SECRET_KEY: str = "super-secret-key-change-in-production-seva-ai"
@@ -43,6 +43,18 @@ class Settings(BaseSettings):
         "https://seva-ai.onrender.com",
     ]
     FRONTEND_URL: str = ""
+ 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: Any) -> str:
+        if not v:
+            return "sqlite+aiosqlite:///seva_local.db"
+        val = str(v)
+        if val.startswith("postgres://"):
+            return val.replace("postgres://", "postgresql+asyncpg://", 1)
+        if val.startswith("postgresql://") and "+asyncpg" not in val:
+            return val.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return val
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="after")
     @classmethod

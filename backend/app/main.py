@@ -25,6 +25,18 @@ if origins:
 
 app.include_router(chat.router)
 app.include_router(documents.router)
+
+@app.on_event("startup")
+async def startup_event():
+    if "sqlite" in settings.DATABASE_URL:
+        from app.database import Base, engine
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        from app.seed import seed_data
+        try:
+            await seed_data()
+        except Exception as e:
+            print(f"Startup seed notice: {e}")
 app.include_router(mock_api.router)
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(profile.router, prefix=settings.API_V1_STR)

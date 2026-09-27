@@ -18,6 +18,8 @@ if "sqlite" not in settings.DATABASE_URL:
             "pool_timeout": 30,
         }
     )
+else:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
 
 engine = create_async_engine(
     settings.DATABASE_URL,

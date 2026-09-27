@@ -126,8 +126,10 @@ async def extract_document_fields(file_path: str, document_type: str) -> Dict[st
     return {
         "_ocr_status": "NEEDS_REVIEW",
         "_ocr_engine": ocr_result.engine if ocr_result else "none",
-        "_confidence_score": 0.0,
+        "_confidence_score": round(ocr_result.average_confidence, 4) if ocr_result else 0.0,
         "_warnings": ["Failed to extract required fields from the document. Please verify image clarity and re-upload."],
+        "raw_text": ocr_result.text if ocr_result else "",
+        "extracted_text": ocr_result.text if ocr_result else "",
         "fields": {},
     }
 
@@ -150,6 +152,8 @@ def _format_extraction_response(parser_res: DocumentParserResult) -> Dict[str, A
     response["_ocr_status"] = parser_res.status
     response["_ocr_engine"] = parser_res.ocr_engine
     response["_warnings"] = parser_res.warnings
+    response["raw_text"] = getattr(parser_res, "raw_text", "")
+    response["extracted_text"] = getattr(parser_res, "raw_text", "")
     return response
 
 
