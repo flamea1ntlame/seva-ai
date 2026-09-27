@@ -1,0 +1,137 @@
+{
+  "services": [
+    {
+      "service_code": "income_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 1,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "caste_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 1,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "birth_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 1,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "death_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 1,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "residence_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "domicile_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "agriculturist_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "land_holding_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "widow_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "unemployment_certificate",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [],
+      "last_checked": "2026-09-26",
+      "verified_rules": 0,
+      "unresolved_questions": [],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "driving_license",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [
+        "https://sarathi.parivahan.gov.in/",
+        "https://transport.karnataka.gov.in/"
+      ],
+      "last_checked": "2026-09-27",
+      "verified_rules": 2,
+      "unresolved_questions": [
+        "Exact Fee Amount",
+        "Official Processing Time",
+        "Appeal Process"
+      ],
+      "conflicting_sources": [],
+      "research_status": "FROZEN/APPROVED"
+    },
+    {
+      "service_code": "learner_license",
+      "jurisdiction": "Karnataka",
+      "official_sources_found": [
+        "https://indiacode.nic.in/handle/123456789/1798",
+        "https://morth.nic.in/"
+      ],
+      "last_checked": "2026-09-27",
+      "verified_rules": 8,
+      "unresolved_questions": [
+        "Official Processing Time",
+        "Appeal Process"
+      ],
+      "conflicting_sources": [],
+      "research_status": "RESEARCHED / PENDING_AUDIT"
+    }
+  ]
+}

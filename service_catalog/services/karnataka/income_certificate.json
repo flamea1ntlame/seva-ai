@@ -1,0 +1,125 @@
+{
+  "service_code": "income_certificate",
+  "service_name": "Income Certificate",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "REQUIRED",
+      "document": "aadhaar",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-INC-002"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "address_proof",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-INC-003"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "ALTERNATIVE_GROUP",
+      "group_id": "income_proof_options",
+      "minimum_required": 1,
+      "documents": [
+        {
+          "document": "salary_slip",
+          "evidence_refs": [
+            "EV-KA-INC-004"
+          ]
+        },
+        {
+          "document": "form_16",
+          "evidence_refs": [
+            "EV-KA-INC-005"
+          ]
+        },
+        {
+          "document": "employer_certificate",
+          "evidence_refs": [
+            "EV-KA-INC-004"
+          ]
+        },
+        {
+          "document": "it_return",
+          "evidence_refs": [
+            "EV-KA-INC-004"
+          ]
+        },
+        {
+          "document": "pension_proof",
+          "evidence_refs": [
+            "EV-KA-INC-004"
+          ]
+        },
+        {
+          "document": "bank_statement",
+          "evidence_refs": [
+            "EV-KA-INC-004"
+          ]
+        }
+      ],
+      "citizen_exposure": "EXPOSE"
+    }
+  ],
+  "fees": [
+    {
+      "amount": 15,
+      "currency": "INR",
+      "evidence_refs": [
+        "EV-KA-INC-001"
+      ],
+      "conflicts": []
+    }
+  ],
+  "officer_workflow": [
+    {
+      "authority": "Village Accountant",
+      "role": "verification",
+      "evidence_refs": [
+        "EV-KA-INC-007"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Tahsildar",
+      "role": "approving",
+      "evidence_refs": [
+        "EV-KA-INC-007"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Tahsildar",
+      "role": "issuing",
+      "evidence_refs": [
+        "EV-KA-INC-007"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Assistant Commissioner",
+      "role": "appeal",
+      "evidence_refs": [
+        "EV-KA-INC-007"
+      ],
+      "status": "VERIFIED"
+    }
+  ],
+  "document_dependencies": [],
+  "processing_time": {
+    "value": 21,
+    "unit": "DAYS",
+    "evidence_refs": [
+      "EV-KA-INC-006"
+    ],
+    "conflicts": [],
+    "status": "VERIFIED"
+  }
+}

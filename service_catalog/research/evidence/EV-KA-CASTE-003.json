@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-CASTE-003",
+  "source_url": "https://nadakacheri.karnataka.gov.in/",
+  "source_title": "Nadakacheri - Caste Certificate Requirements",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "caste_certificate",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Aadhaar Card (Identity Proof), Ration Card/Voter ID (Address Proof), and Caste Proof are required.",
+  "conflicts_with": []
+}

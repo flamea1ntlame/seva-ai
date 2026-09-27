@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-WIDOW-001",
+  "service_code": "widow_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://nadakacheri.karnataka.gov.in/",
+  "source_title": "Nadakacheri Portal - Widow Certificate",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Widow Certificate requires Husband's death certificate, Aadhaar, address proof. Standard time 7-14 days.",
+  "research_only": true,
+  "conflicts_with": []
+}

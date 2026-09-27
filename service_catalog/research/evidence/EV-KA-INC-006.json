@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-INC-006",
+  "source_url": "https://sakala.karnataka.gov.in/",
+  "source_title": "Sakala Services - Income Certificate Processing Time",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "income_certificate",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Processing time for Income Certificate is 21 working days under Sakala.",
+  "conflicts_with": []
+}

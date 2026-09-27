@@ -404,8 +404,16 @@ async def _run_fallback_tool_workflow(
     else:
         app_result = await _execute_tool("create_application", {"service_code": target_service_code, "citizen_id": citizen_id}, citizen_id, db)
         if "error" in app_result:
+            if app_result.get("error") == "PREREQUISITE_NOT_MET":
+                reply_msg = (
+                    f"⚠️ **Prerequisite Required for {requirements.get('service_name', target_service_code)}**\n\n"
+                    f"{app_result.get('message')}\n\n"
+                    f"Would you like me to help you apply for **{app_result.get('prerequisite_title', 'the prerequisite service')}** first?"
+                )
+            else:
+                reply_msg = f"Application creation failed: {app_result.get('error', 'Unknown error')}"
             return {
-                "reply": f"Application creation failed: {app_result['error']}",
+                "reply": reply_msg,
                 "application_id": None,
                 "service_code": target_service_code,
                 "status": None,

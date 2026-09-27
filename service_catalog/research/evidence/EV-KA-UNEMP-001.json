@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-UNEMP-001",
+  "service_code": "unemployment_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://nadakacheri.karnataka.gov.in/",
+  "source_title": "Nadakacheri Portal - Unemployment Certificate",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Unemployment Certificate requires Aadhaar, educational certificates, self declaration, address proof.",
+  "research_only": true,
+  "conflicts_with": []
+}

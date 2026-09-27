@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-BIRTH-005",
+  "source_url": "https://ejanma.karnataka.gov.in/",
+  "source_title": "e-JanMa Karnataka - Registrars of Births and Deaths",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "birth_certificate",
+  "issuing_authority": "Registrar General of India / CRS",
+  "exact_supported_claim": "Rural areas registered by Village Accountant. Urban areas registered by Health Officer / Health Inspector. These act as verification and issuing authorities.",
+  "conflicts_with": []
+}

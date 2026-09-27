@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-DEATH-002",
+  "source_url": "https://crsorgi.gov.in/",
+  "source_title": "Civil Registration System - Section 13 (Current)",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "death_certificate",
+  "issuing_authority": "Registrar General of India / CRS",
+  "exact_supported_claim": "Delayed registration of death > 1 year requires an order from a Sub-Divisional Magistrate or Executive Magistrate and a late fee.",
+  "conflicts_with": []
+}

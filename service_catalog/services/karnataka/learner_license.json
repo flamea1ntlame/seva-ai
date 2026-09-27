@@ -1,0 +1,133 @@
+{
+  "service_code": "learner_license",
+  "service_name": "Learner's Licence",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "REQUIRED",
+      "document": "age_proof",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "address_proof",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "passport_photo",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "application_form",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "CONDITIONAL",
+      "document": "self_declaration",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Form 1 required for Non-Transport applicants under 40 years of age."
+    },
+    {
+      "type": "CONDITIONAL",
+      "document": "medical_certificate_form_1a",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-003",
+        "EV-KA-LL-005"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Form 1A required if applying for Transport vehicle OR if applicant is 40 years of age or older."
+    },
+    {
+      "type": "CONDITIONAL",
+      "document": "parent_guardian_consent",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-002"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Required only for applicants between 16 and 18 years applying for MCWOG <= 50cc."
+    },
+    {
+      "type": "CONDITIONAL",
+      "document": "prior_driving_license",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-LL-002"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Prior LMV licence held for at least one year is required if applying for Transport vehicle."
+    }
+  ],
+  "fees": [
+    {
+      "amount": 150,
+      "currency": "INR",
+      "evidence_refs": [
+        "EV-KA-LL-004"
+      ],
+      "conflicts": [],
+      "status": "VERIFIED",
+      "condition_description": "Learner Licence issue fee (per vehicle class)"
+    },
+    {
+      "amount": 50,
+      "currency": "INR",
+      "evidence_refs": [
+        "EV-KA-LL-004"
+      ],
+      "conflicts": [],
+      "status": "VERIFIED",
+      "condition_description": "Preliminary test fee (per attempt/application, not per class)"
+    }
+  ],
+  "processing_time": {
+    "unit": "DAYS",
+    "evidence_refs": [],
+    "conflicts": [],
+    "status": "NOT_VERIFIED"
+  },
+  "officer_workflow": [
+    {
+      "authority": "Licensing Authority",
+      "role": "testing",
+      "evidence_refs": [
+        "EV-KA-LL-003"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Licensing Authority",
+      "role": "issuing",
+      "evidence_refs": [
+        "EV-KA-LL-003"
+      ],
+      "status": "VERIFIED"
+    }
+  ],
+  "document_dependencies": []
+}

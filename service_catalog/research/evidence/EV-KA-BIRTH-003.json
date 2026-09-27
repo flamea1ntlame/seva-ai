@@ -1,0 +1,14 @@
+{
+  "evidence_id": "EV-KA-BIRTH-003",
+  "source_url": "https://crsorgi.gov.in/",
+  "source_title": "Quarantined 2026 Amendment Claim",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "birth_certificate",
+  "issuing_authority": "Registrar General of India / CRS",
+  "exact_supported_claim": "Quarantined: Claimed there was a 2026 amendment. Verified this does not exist (the amendment was 2023). Quarantined to avoid hallucination.",
+  "conflicts_with": [],
+  "research_only": true,
+  "status": "UNVERIFIED"
+}

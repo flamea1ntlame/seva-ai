@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-INC-003",
+  "source_url": "https://sevasindhu.karnataka.gov.in/",
+  "source_title": "Seva Sindhu - Income Certificate Requirements",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "income_certificate",
+  "issuing_authority": "Revenue Department, Government of Karnataka",
+  "exact_supported_claim": "Address proof required (Ration card, bank passbook, passport, or utility bills).",
+  "conflicts_with": []
+}

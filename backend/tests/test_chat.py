@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.models import User, Service, CitizenProfile
+from app.models import User, Service, CitizenProfile, Document
 from app.auth import get_password_hash
 
 
@@ -96,6 +96,18 @@ async def test_chat_agent_workflows(client: AsyncClient, db_session: AsyncSessio
     me_res = await client.get("/api/auth/me", headers=headers)
     assert me_res.status_code == 200
     user_id = me_res.json()["id"]
+
+    # Seed verified learner_licence for this workflow test to satisfy DL prerequisite
+    ll_doc = Document(
+        user_id=uuid.UUID(user_id),
+        document_type="learner_licence",
+        title="Learner's Licence",
+        file_path="documents/test_ll.pdf",
+        verified=True,
+        verification_status="VERIFIED"
+    )
+    db_session.add(ll_doc)
+    await db_session.commit()
 
     # Test 1: Driving License request
     payload_1 = {

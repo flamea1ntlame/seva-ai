@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-CASTE-001",
+  "source_url": "https://tumkur.nic.in/",
+  "source_title": "Tumkur District - Caste Certificate",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Tumakuru district, Karnataka",
+  "service": "caste_certificate",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "The standard government processing fee for a Caste Certificate is typically Rs. 40/-.",
+  "conflicts_with": [],
+  "research_only": true
+}

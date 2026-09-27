@@ -1,0 +1,46 @@
+{
+  "service_code": "unemployment_certificate",
+  "service_name": "Unemployment Certificate",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "UNKNOWN",
+      "document": "unknown_requirements",
+      "mandatory": false,
+      "evidence_refs": [],
+      "citizen_exposure": "DO_NOT_EXPOSE"
+    }
+  ],
+  "fees": [
+    {
+      "amount": null,
+      "currency": "INR",
+      "evidence_refs": [],
+      "conflicts": [],
+      "status": "NOT_VERIFIED"
+    }
+  ],
+  "processing_time": {
+    "unit": "DAYS",
+    "evidence_refs": [],
+    "conflicts": [],
+    "status": "NOT_VERIFIED"
+  },
+  "officer_workflow": [
+    {
+      "authority": "UNKNOWN",
+      "role": "verification",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "authority": "UNKNOWN",
+      "role": "issuing",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    }
+  ],
+  "document_dependencies": []
+}

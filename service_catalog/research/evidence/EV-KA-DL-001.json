@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-DL-001",
+  "source_url": "https://sarathi.parivahan.gov.in/",
+  "source_title": "Parivahan Sewa - Driving Licence Application",
+  "source_type": "Official Central Government Portal",
+  "date_accessed": "2026-09-27",
+  "jurisdiction": "India / Karnataka",
+  "service": "driving_license",
+  "issuing_authority": "Ministry of Road Transport & Highways",
+  "exact_supported_claim": "Applicants must provide proof of age, proof of residence, application form, passport photograph, and self-declaration. A fee slip is generated upon payment. Learner's Licence is a prerequisite.",
+  "research_only": true
+}

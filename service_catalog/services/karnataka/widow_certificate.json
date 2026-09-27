@@ -1,0 +1,64 @@
+{
+  "service_code": "widow_certificate",
+  "service_name": "Widow Certificate",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "REQUIRED",
+      "document": "death_certificate",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-WIDOW-002"
+      ],
+      "citizen_exposure": "EXPOSE"
+    }
+  ],
+  "fees": [
+    {
+      "amount": null,
+      "currency": "INR",
+      "evidence_refs": [],
+      "conflicts": [],
+      "status": "NOT_VERIFIED"
+    }
+  ],
+  "processing_time": {
+    "value": 20,
+    "unit": "DAYS",
+    "evidence_refs": [
+      "EV-KA-WIDOW-002"
+    ],
+    "conflicts": [],
+    "status": "VERIFIED",
+    "condition_description": "Excluding government holidays"
+  },
+  "officer_workflow": [
+    {
+      "authority": "UNKNOWN",
+      "role": "verification",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "authority": "Revenue Department",
+      "role": "issuing",
+      "evidence_refs": [
+        "EV-KA-WIDOW-002"
+      ],
+      "status": "VERIFIED"
+    }
+  ],
+  "document_dependencies": [
+    {
+      "from_service": "death_certificate",
+      "to_service": "widow_certificate",
+      "relationship": "DEPENDS_ON",
+      "evidence_refs": [
+        "EV-KA-WIDOW-002"
+      ],
+      "status": "VERIFIED"
+    }
+  ]
+}

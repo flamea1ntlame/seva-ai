@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Service Dependency Registry",
+  "description": "Authoritative registry of inter-service prerequisites across government workflows.",
+  "dependencies": [
+    {
+      "from_service": "learner_license",
+      "to_service": "driving_license",
+      "relationship": "DEPENDS_ON",
+      "condition": null,
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "status": "VERIFIED",
+      "description": "Holding an effective Learner's Licence for at least 30 days is a statutory prerequisite before applying for a permanent Driving Licence (Motor Vehicles Act 1988 §9(3), CMVR 1989 Rule 14)."
+    },
+    {
+      "from_service": "death_certificate",
+      "to_service": "widow_certificate",
+      "relationship": "DEPENDS_ON",
+      "condition": null,
+      "evidence_refs": [
+        "EV-KA-WIDOW-002"
+      ],
+      "status": "VERIFIED",
+      "description": "Registration of the husband's death and issuance of an official Death Certificate is a prerequisite for a Widow Certificate (RBD Act 1969, Karnataka Revenue Department)."
+    },
+    {
+      "from_service": "driving_license",
+      "to_service": "learner_license",
+      "relationship": "DEPENDS_ON",
+      "condition": "transport_vehicle",
+      "evidence_refs": [
+        "EV-KA-LL-002"
+      ],
+      "status": "VERIFIED",
+      "description": "Prior LMV Driving Licence held for at least one year is required if applying for a Transport vehicle Learner's Licence (Motor Vehicles Act 1988 §7(1))."
+    }
+  ]
+}

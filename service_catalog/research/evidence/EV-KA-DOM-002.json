@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-DOM-002",
+  "service_code": "domicile_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://sevasindhu.karnataka.gov.in/",
+  "source_title": "Various Scheme Notificaitons",
+  "source_type": "Official Notifications",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Domicile eligibility duration varies between 6, 7, and 10 years depending on the specific state scheme.",
+  "research_only": true,
+  "conflicts_with": []
+}

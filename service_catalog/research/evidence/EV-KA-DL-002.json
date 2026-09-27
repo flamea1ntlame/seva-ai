@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-DL-002",
+  "source_url": "https://transport.karnataka.gov.in/",
+  "source_title": "Karnataka Transport Department - RTO Workflow",
+  "source_type": "Official State Government Portal",
+  "date_accessed": "2026-09-27",
+  "jurisdiction": "Karnataka",
+  "service": "driving_license",
+  "issuing_authority": "Karnataka Transport Department",
+  "exact_supported_claim": "The Motor Vehicle Inspector conducts the driving skill test for verification. The RTO/ARTO is the issuing and approving authority.",
+  "research_only": true
+}

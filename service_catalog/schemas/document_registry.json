@@ -1,0 +1,218 @@
+{
+  "documents": [
+    {
+      "code": "aadhaar",
+      "display_name": "Aadhaar Card",
+      "evidence_refs": [
+        "EV-KA-INC-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "address_proof",
+      "display_name": "Address Proof",
+      "evidence_refs": [
+        "EV-KA-INC-003",
+        "EV-KA-DL-003",
+        "EV-KA-LL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "income_proof",
+      "display_name": "Income Proof",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "salary_slip",
+      "display_name": "Salary Slip",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "form_16",
+      "display_name": "Form 16",
+      "evidence_refs": [
+        "EV-KA-INC-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "magistrate_order",
+      "display_name": "Magistrate Order",
+      "evidence_refs": [
+        "EV-KA-BIRTH-002",
+        "EV-KA-DEATH-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "caste_community_proof",
+      "display_name": "Caste/Community Proof",
+      "evidence_refs": [
+        "EV-KA-CASTE-003"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "written_permission_prescribed_authority",
+      "display_name": "Written Permission of Prescribed Authority",
+      "evidence_refs": [
+        "EV-KA-BIRTH-001",
+        "EV-KA-DEATH-001"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "identity_proof",
+      "display_name": "Identity Proof",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "age_proof",
+      "display_name": "Age Proof",
+      "evidence_refs": [
+        "EV-KA-DL-003",
+        "EV-KA-LL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "self_declaration",
+      "display_name": "Self Declaration",
+      "evidence_refs": [
+        "EV-KA-DL-004",
+        "EV-KA-LL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "passport_photo",
+      "display_name": "Passport Size Photograph",
+      "evidence_refs": [
+        "EV-KA-DL-003",
+        "EV-KA-LL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "application_form",
+      "display_name": "Application Form",
+      "evidence_refs": [
+        "EV-KA-DL-003",
+        "EV-KA-LL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "non_availability_certificate",
+      "display_name": "Non-Availability Certificate (NAC)",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "affidavit",
+      "display_name": "Affidavit",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "employer_certificate",
+      "display_name": "Employer Certificate",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "it_return",
+      "display_name": "IT Return",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "pension_proof",
+      "display_name": "Pension Proof",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "bank_statement",
+      "display_name": "Latest Bank Statement",
+      "evidence_refs": [
+        "EV-KA-INC-004"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "domicile_proof_years",
+      "display_name": "Proof of Continuous Residence",
+      "evidence_refs": [
+        "EV-KA-DOM-002"
+      ],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "rtc_pahani",
+      "display_name": "RTC / Pahani",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "death_certificate",
+      "display_name": "Death Certificate",
+      "evidence_refs": [
+        "EV-KA-WIDOW-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "educational_certificate",
+      "display_name": "Educational Certificate",
+      "evidence_refs": [],
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "code": "learner_licence",
+      "display_name": "Learner's Licence",
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "medical_certificate_form_1a",
+      "display_name": "Medical Certificate (Form 1A)",
+      "evidence_refs": [
+        "EV-KA-LL-003"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "parent_guardian_consent",
+      "display_name": "Parent/Guardian Consent Letter",
+      "evidence_refs": [
+        "EV-KA-LL-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "code": "prior_driving_license",
+      "display_name": "Driving Licence",
+      "evidence_refs": [
+        "EV-KA-LL-002"
+      ],
+      "status": "VERIFIED"
+    }
+  ]
+}

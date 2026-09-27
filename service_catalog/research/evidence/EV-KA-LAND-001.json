@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-LAND-001",
+  "service_code": "land_holding_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://nadakacheri.karnataka.gov.in/",
+  "source_title": "Nadakacheri Portal - Land Holding Certificate",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Land Holding Certificate requires Aadhaar, RTC/Pahani, issued by Revenue Department. Processing time 7 to 21 days.",
+  "research_only": true,
+  "conflicts_with": []
+}

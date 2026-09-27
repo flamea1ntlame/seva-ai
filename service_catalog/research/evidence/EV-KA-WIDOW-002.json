@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-WIDOW-002",
+  "service_code": "widow_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://serviceonline.gov.in/",
+  "source_title": "Service Plus - Widow Certificate",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Widow Certificate requires Husband's death certificate. Issued by Revenue Department. Dependency established. Processing time 20 days excluding government holidays.",
+  "conflicts_with": []
+}

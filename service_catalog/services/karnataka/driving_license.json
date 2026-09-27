@@ -1,0 +1,107 @@
+{
+  "service_code": "driving_license",
+  "service_name": "Driving Licence",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "REQUIRED",
+      "document": "age_proof",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-003"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "address_proof",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-003"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "passport_photo",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-003"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "application_form",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-003"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "self_declaration",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-004"
+      ],
+      "citizen_exposure": "EXPOSE"
+    },
+    {
+      "type": "REQUIRED",
+      "document": "learner_licence",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "citizen_exposure": "EXPOSE"
+    }
+  ],
+  "fees": [
+    {
+      "amount": null,
+      "currency": "INR",
+      "evidence_refs": [],
+      "conflicts": [],
+      "status": "NOT_VERIFIED"
+    }
+  ],
+  "processing_time": {
+    "unit": "DAYS",
+    "evidence_refs": [],
+    "conflicts": [],
+    "status": "NOT_VERIFIED"
+  },
+  "officer_workflow": [
+    {
+      "authority": "Licensing Authority",
+      "role": "testing",
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Licensing Authority",
+      "role": "issuing",
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "status": "VERIFIED"
+    }
+  ],
+  "document_dependencies": [
+    {
+      "from_service": "learner_license",
+      "to_service": "driving_license",
+      "relationship": "DEPENDS_ON",
+      "evidence_refs": [
+        "EV-KA-DL-005"
+      ],
+      "status": "VERIFIED"
+    }
+  ]
+}

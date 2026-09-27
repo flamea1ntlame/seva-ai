@@ -1,0 +1,103 @@
+{
+  "service_code": "birth_certificate",
+  "service_name": "Birth Certificate",
+  "jurisdiction": {
+    "state": "Karnataka"
+  },
+  "requirements": [
+    {
+      "type": "CONDITIONAL",
+      "document": "written_permission_prescribed_authority",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-BIRTH-001"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Delayed > 30 days and <= 1 year requires written permission from the prescribed authority."
+    },
+    {
+      "type": "CONDITIONAL",
+      "document": "magistrate_order",
+      "mandatory": true,
+      "evidence_refs": [
+        "EV-KA-BIRTH-002"
+      ],
+      "citizen_exposure": "EXPOSE",
+      "condition_description": "Delayed > 1 year requires an order from a Magistrate."
+    },
+    {
+      "type": "UNKNOWN",
+      "document": "identity_proof",
+      "mandatory": false,
+      "evidence_refs": [],
+      "citizen_exposure": "DO_NOT_EXPOSE"
+    }
+  ],
+  "fees": [
+    {
+      "amount": 0,
+      "currency": "INR",
+      "evidence_refs": [
+        "EV-KA-BIRTH-004"
+      ],
+      "conflicts": [],
+      "status": "VERIFIED",
+      "condition_description": "Normal registration within 21 days"
+    },
+    {
+      "amount": null,
+      "currency": "INR",
+      "evidence_refs": [
+        "EV-KA-BIRTH-001",
+        "EV-KA-BIRTH-002"
+      ],
+      "conflicts": [],
+      "status": "VERIFIED",
+      "condition_description": "Delayed registration"
+    }
+  ],
+  "officer_workflow": [
+    {
+      "authority": "Tahsildar or Commissioner/Chief Officer of Municipality",
+      "role": "approving",
+      "evidence_refs": [
+        "EV-KA-BIRTH-001"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Sub-Divisional Magistrate or Executive Magistrate",
+      "role": "approving",
+      "evidence_refs": [
+        "EV-KA-BIRTH-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Village Accountant (Rural) or Health Officer/Inspector (Urban)",
+      "role": "verification",
+      "evidence_refs": [
+        "EV-KA-BIRTH-005"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "authority": "Village Accountant (Rural) or Health Officer/Inspector (Urban)",
+      "role": "issuing",
+      "evidence_refs": [
+        "EV-KA-BIRTH-005"
+      ],
+      "status": "VERIFIED"
+    }
+  ],
+  "document_dependencies": [],
+  "processing_time": {
+    "value": 21,
+    "unit": "DAYS",
+    "evidence_refs": [
+      "EV-KA-BIRTH-006"
+    ],
+    "conflicts": [],
+    "status": "VERIFIED"
+  }
+}

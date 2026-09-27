@@ -1,0 +1,285 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Government Service Schema",
+  "type": "object",
+  "properties": {
+    "service_code": {
+      "type": "string"
+    },
+    "service_name": {
+      "type": "string"
+    },
+    "jurisdiction": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "district": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "municipality": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/requirement"
+      }
+    },
+    "fees": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "condition_description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency",
+          "evidence_refs",
+          "conflicts"
+        ]
+      }
+    },
+    "processing_time": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string"
+        },
+        "condition_description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit",
+        "evidence_refs",
+        "conflicts"
+      ]
+    },
+    "officer_workflow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "authority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "role",
+          "evidence_refs"
+        ]
+      }
+    },
+    "document_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from_service": {
+            "type": "string"
+          },
+          "to_service": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "DEPENDS_ON"
+            ]
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "condition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "from_service",
+          "to_service",
+          "relationship",
+          "evidence_refs"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "requirement": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "REQUIRED",
+            "CONDITIONAL",
+            "ALTERNATIVE_GROUP",
+            "UNKNOWN"
+          ]
+        },
+        "document": {
+          "type": "string"
+        },
+        "mandatory": {
+          "type": "boolean"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "citizen_exposure": {
+          "type": "string",
+          "enum": [
+            "EXPOSE",
+            "DO_NOT_EXPOSE"
+          ]
+        },
+        "condition_description": {
+          "type": "string"
+        },
+        "group_id": {
+          "type": "string"
+        },
+        "minimum_required": {
+          "type": "integer"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "type": "string"
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "document",
+              "evidence_refs"
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "citizen_exposure"
+      ]
+    }
+  },
+  "required": [
+    "service_code",
+    "service_name",
+    "jurisdiction",
+    "requirements",
+    "fees",
+    "officer_workflow",
+    "document_dependencies"
+  ]
+}

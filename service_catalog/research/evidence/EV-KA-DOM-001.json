@@ -1,0 +1,13 @@
+{
+  "evidence_id": "EV-KA-DOM-001",
+  "service_code": "domicile_certificate",
+  "jurisdiction": "Karnataka",
+  "source_url": "https://sevasindhu.karnataka.gov.in/",
+  "source_title": "Seva Sindhu / Nadakacheri Portal - Domicile Certificate",
+  "source_type": "Official Portal",
+  "date_accessed": "2026-09-26",
+  "issuing_authority": "Revenue Department",
+  "exact_supported_claim": "Domicile certificate requires Aadhaar and address proof, issued by Tahsildar.",
+  "research_only": false,
+  "conflicts_with": []
+}

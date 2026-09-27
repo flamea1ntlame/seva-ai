@@ -1,0 +1,12 @@
+{
+  "evidence_id": "EV-KA-DEATH-005",
+  "source_url": "https://crsorgi.gov.in/",
+  "source_title": "CRS - Normal Death Registration Fee",
+  "source_type": "GOVERNMENT_PORTAL",
+  "date_accessed": "2026-09-26",
+  "jurisdiction": "Karnataka",
+  "service": "death_certificate",
+  "issuing_authority": "Registrar General of India / CRS",
+  "exact_supported_claim": "Normal death registration within 21 days is free.",
+  "conflicts_with": []
+}

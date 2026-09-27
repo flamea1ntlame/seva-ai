@@ -10,6 +10,7 @@ from app.workflows.engine import ApplicationState, WorkflowEngine
 from app.connectors.registry import get_connector
 from app.workflows.application_submission import ApplicationSubmissionService
 from app.audit import log_audit_event
+from app.agent.dependencies import get_service_prerequisites, check_citizen_prerequisites
 
 
 TOOLS_SCHEMA = [
@@ -153,11 +154,55 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
             "service_code": service_code
         }
     
+    prereqs = get_service_prerequisites(service_code)
+
+    # Inspect authoritative local service catalog JSON if present for rich structured requirements
+    import json
+    import os
+    kb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "service_catalog", "services", "karnataka", f"{service_code}.json"))
+    
+    required_docs = []
+    conditional_reqs = []
+    alt_groups = []
+
+    if os.path.exists(kb_path):
+        try:
+            with open(kb_path, "r") as f:
+                kb_data = json.load(f)
+            for req in kb_data.get("requirements", []):
+                # Never expose UNKNOWN, NOT_VERIFIED, or DO_NOT_EXPOSE to citizens
+                if req.get("type") in ["UNKNOWN", "NOT_VERIFIED"] or req.get("citizen_exposure") == "DO_NOT_EXPOSE":
+                    continue
+                if req.get("type") == "REQUIRED":
+                    required_docs.append(req.get("document"))
+                elif req.get("type") == "CONDITIONAL":
+                    conditional_reqs.append({
+                        "document": req.get("document"),
+                        "condition": req.get("condition_description"),
+                        "evidence_refs": req.get("evidence_refs", [])
+                    })
+                elif req.get("type") == "ALTERNATIVE_GROUP":
+                    alt_groups.append({
+                        "group_id": req.get("group_id"),
+                        "minimum_required": req.get("minimum_required", 1),
+                        "documents": [d.get("document") for d in req.get("documents", [])]
+                    })
+        except Exception:
+            pass
+
+    # Merge with DB required documents, strictly excluding unknown or quarantined requirements
+    for d in (service.required_documents or []):
+        if d != "unknown_requirements" and d not in required_docs:
+            required_docs.append(d)
+
     return {
         "service_code": service.code,
         "service_name": service.title,
         "department": service.department,
-        "required_documents": service.required_documents or [],
+        "required_documents": required_docs,
+        "conditional_requirements": conditional_reqs,
+        "alternative_groups": alt_groups,
+        "prerequisites": prereqs,
         "required_fields": service.required_fields or [],
         "description": service.description,
         "fee_amount": float(service.fee_amount),
@@ -165,7 +210,12 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
     }
 
 
-async def tool_create_application(db: AsyncSession, service_code: str, citizen_id: str) -> Dict[str, Any]:
+async def tool_create_application(
+    db: AsyncSession,
+    service_code: str,
+    citizen_id: str,
+    context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     try:
         user_uuid = uuid.UUID(citizen_id)
     except ValueError:
@@ -176,6 +226,45 @@ async def tool_create_application(db: AsyncSession, service_code: str, citizen_i
     if not service:
         return {"error": f"Service code '{service_code}' does not exist."}
 
+    # 1. Statutory Prerequisite Verification
+    prereq_res = await check_citizen_prerequisites(db, user_uuid, service_code, context)
+    if not prereq_res["satisfied"]:
+        primary = prereq_res["primary_prerequisite"]
+        return {
+            "error": "PREREQUISITE_NOT_MET",
+            "service_code": service.code,
+            "service_name": service.title,
+            "prerequisite_service": primary["service_code"],
+            "prerequisite_title": primary["title"],
+            "description": primary["description"],
+            "evidence_refs": primary.get("evidence_refs", []),
+            "message": f"Prerequisite requirement not met: You must first obtain a valid {primary['title']} before applying for {service.title}. {primary['description']}"
+        }
+
+    # 2. Duplicate Application Protection
+    existing_query = select(Application).where(
+        Application.user_id == user_uuid,
+        Application.service_id == service.id,
+        Application.status.in_([
+            "DISCOVER", "COLLECTING_DOCUMENTS", "EXTRACTING",
+            "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
+            "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
+        ])
+    )
+    existing_res = await db.execute(existing_query)
+    existing_app = existing_res.scalars().first()
+    if existing_app:
+        return {
+            "application_id": str(existing_app.id),
+            "application_number": existing_app.application_number,
+            "service": service.title,
+            "service_code": service.code,
+            "department": service.department,
+            "current_status": existing_app.status,
+            "message": "Existing active application retrieved."
+        }
+
+    # 3. Create New Application
     app_num = f"SEVA-{random.randint(100000, 999999)}"
 
     application = Application(
