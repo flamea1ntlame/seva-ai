@@ -1,7 +1,7 @@
 import os
 import uuid
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -312,7 +312,7 @@ async def upload_document(
 
             import json
 
-            def _clean_json_val(val: Any) -> Any:
+            def _clean_json_val(val):
                 if val is None:
                     return None
                 try:
