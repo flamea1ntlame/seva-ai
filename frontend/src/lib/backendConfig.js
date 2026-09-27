@@ -31,7 +31,7 @@ function resolveBackendUrl(env = process.env) {
     for (const key of targetKeys) {
       if (typeof env[key] === "string" && env[key].trim()) {
         const candidate = env[key].trim();
-        if (key === "RENDER_EXTERNAL_URL" && (candidate.includes("frontend") || candidate.includes("vercel") || (env.RENDER_SERVICE_NAME && candidate.includes(env.RENDER_SERVICE_NAME)))) {
+        if (key === "RENDER_EXTERNAL_URL" && !candidate.includes("seva-ai-2hks")) {
           continue;
         }
         rawUrl = candidate;
@@ -46,7 +46,7 @@ function resolveBackendUrl(env = process.env) {
         if (targetKeys.includes(normalizedKey)) {
           if (typeof env[k] === "string" && env[k].trim()) {
             const candidate = env[k].trim();
-            if (normalizedKey === "RENDER_EXTERNAL_URL" && (candidate.includes("frontend") || candidate.includes("vercel") || (env.RENDER_SERVICE_NAME && candidate.includes(env.RENDER_SERVICE_NAME)))) {
+            if (normalizedKey === "RENDER_EXTERNAL_URL" && !candidate.includes("seva-ai-2hks")) {
               continue;
             }
             rawUrl = candidate;

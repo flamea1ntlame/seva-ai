@@ -41,12 +41,12 @@ test("API Error Handling & Base URL Regression Suite", async (t) => {
     assert.equal(getApiBaseUrl(), "https://seva-backend.onrender.com");
   });
 
-  await t.test("2. getApiBaseUrl defaults to relative URL '' on remote production browser host when env unset", () => {
+  await t.test("2. getApiBaseUrl defaults to https://seva-ai-2hks.onrender.com on remote production browser host when env unset", () => {
     delete process.env.NEXT_PUBLIC_API_URL;
     globalThis.window = {
       location: { hostname: "seva-ai.onrender.com", origin: "https://seva-ai.onrender.com" },
     };
-    assert.equal(getApiBaseUrl(), "");
+    assert.equal(getApiBaseUrl(), "https://seva-ai-2hks.onrender.com");
   });
 
   await t.test("3. getApiBaseUrl uses http://localhost:8000 on local development machine", () => {

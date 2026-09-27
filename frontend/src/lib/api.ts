@@ -26,10 +26,13 @@ export class ApiError extends Error {
   }
 }
 
+export const DEFAULT_PRODUCTION_BACKEND_URL = "https://seva-ai-2hks.onrender.com";
+
 /**
  * Returns the resolved API base URL.
  * In production browser environments, if NEXT_PUBLIC_API_URL is unset,
- * returns an empty string so requests route through Next.js proxy/rewrites
+ * defaults to the stable verified SEVA Render backend:
+ * https://seva-ai-2hks.onrender.com
  * rather than attempting to connect to localhost:8000 on the citizen's machine.
  */
 export function getApiBaseUrl(): string {
@@ -47,12 +50,13 @@ export function getApiBaseUrl(): string {
       window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1" ||
       window.location.hostname === "0.0.0.0";
-    if (!isLocalhost) {
-      return "";
+    if (isLocalhost) {
+      return "http://localhost:8000";
     }
+    return DEFAULT_PRODUCTION_BACKEND_URL;
   }
 
-  return "http://localhost:8000";
+  return DEFAULT_PRODUCTION_BACKEND_URL;
 }
 
 /**
@@ -356,9 +360,9 @@ export async function handleSessionValidationOn401(
   const isValid = await validateSession();
   if (!isValid && router) {
     if (typeof router.replace === "function") {
-      router.replace("/login");
+      router.replace("/login?session_expired=1");
     } else if (typeof router.push === "function") {
-      router.push("/login");
+      router.push("/login?session_expired=1");
     }
   }
   return isValid;

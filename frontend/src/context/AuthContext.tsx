@@ -20,7 +20,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   signup: (full_name: string, email: string, password: string, phone_number?: string) => Promise<void>;
   logout: () => void;
-  refreshUser: () => Promise<User | null>;
+  refreshUser: (tokenOverride?: string) => Promise<User | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,9 +30,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true);
   const router = useRouter();
 
-  const refreshUser = useCallback(async (): Promise<User | null> => {
+  const refreshUser = useCallback(async (tokenOverride?: string): Promise<User | null> => {
     setLoading(true);
-    const rawToken = typeof window !== "undefined" ? localStorage.getItem("seva_token") : null;
+    const rawToken =
+      tokenOverride ||
+      (typeof window !== "undefined" ? localStorage.getItem("seva_token") : null);
     const token =
       rawToken && rawToken !== "null" && rawToken !== "undefined" && rawToken.trim() !== ""
         ? rawToken.trim()
@@ -45,7 +47,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      const userData = await fetchApi("/api/auth/me");
+      const userData = await fetchApi("/api/auth/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       setUser(userData);
       return userData;
     } catch (err: any) {
@@ -131,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Immediately validate the NEW token with /api/auth/me
       let verifiedUser: User | null = null;
       try {
-        verifiedUser = await refreshUser();
+        verifiedUser = await refreshUser(data.access_token);
       } catch (verifyErr: any) {
         if (typeof window !== "undefined") {
           localStorage.removeItem("seva_token");
