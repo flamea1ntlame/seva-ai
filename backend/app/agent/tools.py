@@ -57,7 +57,7 @@ TOOLS_SCHEMA = [
     },
     {
         "name": "extract_document_data",
-        "description": "Processes an uploaded document with Vision OCR, extracts key structured fields, updates verification_status to VERIFIED, and returns extracted data.",
+        "description": "Processes an uploaded document with pretrained OCR, extracts key structured fields, updates verification_status to OCR_EXTRACTED, and returns extracted data.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -123,6 +123,28 @@ TOOLS_SCHEMA = [
             },
             "required": ["application_id"]
         }
+    },
+    {
+        "name": "update_application_field",
+        "description": "Updates a citizen-declared form data field on an active application (e.g. 'annual_income', 'occupation', 'blood_group', 'vehicle_class'). Strictly prohibited for document/OCR-derived fields such as date_of_birth, applicant_name, father_name, mother_name, or place_of_birth, which require official document upload.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {
+                    "type": "string",
+                    "description": "The unique UUID string of the application."
+                },
+                "field": {
+                    "type": "string",
+                    "description": "The name of the field to update (e.g. 'annual_income', 'occupation', 'blood_group', 'vehicle_class')."
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value provided by the citizen."
+                }
+            },
+            "required": ["application_id", "field", "value"]
+        }
     }
 ]
 
@@ -146,6 +168,7 @@ async def tool_list_services(db: AsyncSession) -> List[Dict[str, Any]]:
 
 
 async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> Dict[str, Any]:
+    from app.service_rules import get_requirements as get_rules_requirements
     result = await db.execute(select(Service).where(Service.code == service_code))
     service = result.scalar_one_or_none()
     if not service:
@@ -155,13 +178,15 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
         }
     
     prereqs = get_service_prerequisites(service_code)
+    rules_data = await get_rules_requirements(service.code, db=db)
 
     # Inspect authoritative local service catalog JSON if present for rich structured requirements
     import json
     import os
     kb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "service_catalog", "services", "karnataka", f"{service_code}.json"))
     
-    required_docs = []
+    raw_docs = service.required_documents or rules_data.get("required_documents", [])
+    required_docs = [d for d in raw_docs if d != "unknown_requirements"]
     conditional_reqs = []
     alt_groups = []
 
@@ -170,11 +195,11 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
             with open(kb_path, "r") as f:
                 kb_data = json.load(f)
             for req in kb_data.get("requirements", []):
-                # Never expose UNKNOWN, NOT_VERIFIED, or DO_NOT_EXPOSE to citizens
                 if req.get("type") in ["UNKNOWN", "NOT_VERIFIED"] or req.get("citizen_exposure") == "DO_NOT_EXPOSE":
                     continue
                 if req.get("type") == "REQUIRED":
-                    required_docs.append(req.get("document"))
+                    if req.get("document") not in required_docs:
+                        required_docs.append(req.get("document"))
                 elif req.get("type") == "CONDITIONAL":
                     conditional_reqs.append({
                         "document": req.get("document"),
@@ -189,12 +214,7 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
                     })
         except Exception:
             pass
-
-    # Merge with DB required documents, strictly excluding unknown or quarantined requirements
-    for d in (service.required_documents or []):
-        if d != "unknown_requirements" and d not in required_docs:
-            required_docs.append(d)
-
+    
     return {
         "service_code": service.code,
         "service_name": service.title,
@@ -203,10 +223,15 @@ async def tool_get_service_requirements(db: AsyncSession, service_code: str) -> 
         "conditional_requirements": conditional_reqs,
         "alternative_groups": alt_groups,
         "prerequisites": prereqs,
-        "required_fields": service.required_fields or [],
-        "description": service.description,
+        "required_fields": service.required_fields or rules_data.get("required_fields", []),
+        "description": service.description or rules_data.get("description", ""),
         "fee_amount": float(service.fee_amount),
         "processing_time_days": service.processing_time_days,
+        "document_options": rules_data.get("document_options", {}),
+        "document_dependencies": rules_data.get("document_dependencies", []),
+        "responsible_authority": rules_data.get("responsible_authority", {}),
+        "jurisdiction": rules_data.get("jurisdiction", {}),
+        "scholarship_guidance": rules_data.get("scholarship_guidance"),
     }
 
 
@@ -241,30 +266,30 @@ async def tool_create_application(
             "message": f"Prerequisite requirement not met: You must first obtain a valid {primary['title']} before applying for {service.title}. {primary['description']}"
         }
 
-    # 2. Duplicate Application Protection
-    existing_query = select(Application).where(
-        Application.user_id == user_uuid,
-        Application.service_id == service.id,
-        Application.status.in_([
-            "DISCOVER", "COLLECTING_DOCUMENTS", "EXTRACTING",
-            "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
-            "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
-        ])
+    # 2. Idempotency check: reuse existing active application for this citizen and service
+    existing_res = await db.execute(
+        select(Application).where(
+            Application.user_id == user_uuid,
+            Application.service_id == service.id,
+            Application.status.in_([
+                "DISCOVER", "COLLECTING_DOCUMENTS", "EXTRACTING",
+                "VALIDATING", "MISSING_INFORMATION", "READY_FOR_REVIEW",
+                "CONSENT_REQUIRED", "SUBMITTING", "SUBMITTED", "TRACKING"
+            ])
+        ).order_by(Application.created_at.desc())
     )
-    existing_res = await db.execute(existing_query)
     existing_app = existing_res.scalars().first()
     if existing_app:
         return {
             "application_id": str(existing_app.id),
             "application_number": existing_app.application_number,
+            "current_status": existing_app.status,
             "service": service.title,
             "service_code": service.code,
             "department": service.department,
-            "current_status": existing_app.status,
             "message": "Existing active application retrieved."
         }
 
-    # 3. Create New Application
     app_num = f"SEVA-{random.randint(100000, 999999)}"
 
     application = Application(
@@ -351,11 +376,13 @@ async def tool_extract_document_data(db: AsyncSession, document_id: str, citizen
 
     if extracted is not None:
         doc.extracted_data = extracted
-        doc.verification_status = "VERIFIED"
-        doc.verified = True
+        ocr_status = extracted.get("_ocr_status", "OCR_EXTRACTED") if isinstance(extracted, dict) else "OCR_EXTRACTED"
+        doc.verification_status = ocr_status
+        # OCR extraction does NOT confer authenticity verification
+        doc.verified = False
 
     await log_audit_event(
-        db, actor_type="AI_AGENT", action="DOCUMENT_VERIFIED",
+        db, actor_type="AI_AGENT", action="DOCUMENT_OCR_EXTRACTED",
         resource_type="document", resource_id=str(doc.id),
         user_id=doc.user_id, details={"document_type": doc.document_type}
     )
@@ -383,33 +410,48 @@ async def tool_get_citizen_profile(db: AsyncSession, citizen_id: str) -> Dict[st
 
     result = await db.execute(
         select(Document).where(
-            Document.user_id == user_uuid,
-            Document.verification_status == "VERIFIED"
+            Document.user_id == user_uuid
         )
     )
     docs = result.scalars().all()
 
     merged_profile: Dict[str, Any] = {}
-    uploaded_document_types = set()
+    verified_document_types = set()
+    received_document_types = set()
+    review_needed_document_types = set()
 
     for doc in docs:
-        uploaded_document_types.add(doc.document_type)
-        if doc.extracted_data and isinstance(doc.extracted_data, dict):
-            for key, val in doc.extracted_data.items():
-                if val is not None and key not in merged_profile:
-                    merged_profile[key] = val
+        received_document_types.add(doc.document_type)
+        if doc.verification_status == "VERIFIED":
+            verified_document_types.add(doc.document_type)
+            if doc.extracted_data and isinstance(doc.extracted_data, dict):
+                for key, val in doc.extracted_data.items():
+                    if val is not None and str(val).strip() != "" and key not in merged_profile:
+                        merged_profile[key] = val
+        elif doc.verification_status in ("NEEDS_REVIEW", "OCR_EXTRACTED", "NOT_CHECKED"):
+            review_needed_document_types.add(doc.document_type)
 
     return {
         "citizen_id": citizen_id,
         "merged_profile": merged_profile,
-        "uploaded_document_types": list(uploaded_document_types),
+        "uploaded_document_types": sorted(list(verified_document_types)),
+        "verified_document_types": sorted(list(verified_document_types)),
+        "received_document_types": sorted(list(received_document_types)),
+        "review_needed_document_types": sorted(list(review_needed_document_types)),
     }
 
 
-async def tool_request_consent(db: AsyncSession, application_id: str, data_requested: List[str], requesting_department: str, purpose: str) -> Dict[str, Any]:
+async def tool_request_consent(
+    db: AsyncSession,
+    application_id: str,
+    data_requested: List[str],
+    requesting_department: str,
+    purpose: str,
+    citizen_id: Optional[str] = None
+) -> Dict[str, Any]:
     try:
-        app_uuid = uuid.UUID(application_id)
-    except ValueError:
+        app_uuid = uuid.UUID(str(application_id))
+    except (ValueError, TypeError):
         return {"error": "Invalid application_id UUID format."}
 
     from sqlalchemy.orm import selectinload
@@ -421,6 +463,10 @@ async def tool_request_consent(db: AsyncSession, application_id: str, data_reque
     app = result.scalar_one_or_none()
     if not app:
         return {"error": f"Application '{application_id}' not found."}
+
+    # Ownership check: Application.user_id must match authenticated citizen_id
+    if citizen_id is not None and str(app.user_id) != str(citizen_id):
+        return {"error": "Unauthorized: Application does not belong to the authenticated citizen."}
 
     if app.status != ApplicationState.READY_FOR_REVIEW:
         return {"error": f"Application must be in READY_FOR_REVIEW state to request consent. Current status is {app.status}."}
@@ -480,11 +526,136 @@ async def tool_request_consent(db: AsyncSession, application_id: str, data_reque
     }
 
 
-async def tool_submit_application(db: AsyncSession, application_id: str) -> Dict[str, Any]:
+async def tool_submit_application(
+    db: AsyncSession,
+    application_id: str,
+    citizen_id: Optional[str] = None
+) -> Dict[str, Any]:
     try:
-        app_uuid = uuid.UUID(application_id)
-    except ValueError:
+        app_uuid = uuid.UUID(str(application_id))
+    except (ValueError, TypeError):
         return {"error": "Invalid application_id UUID format."}
-        
+
+    result = await db.execute(
+        select(Application).where(Application.id == app_uuid)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        return {"error": f"Application '{application_id}' not found."}
+
+    # Ownership check: Application.user_id must match authenticated citizen_id
+    if citizen_id is not None and str(app.user_id) != str(citizen_id):
+        return {"error": "Unauthorized: Application does not belong to the authenticated citizen."}
+
     submission_service = ApplicationSubmissionService(db)
     return await submission_service.submit(app_uuid, actor_type="AI_AGENT")
+
+
+DOCUMENT_ONLY_FIELDS = {
+    "date_of_birth", "dob", "applicant_name", "name",
+    "father_name", "mother_name", "place_of_birth",
+    "aadhaar_number", "pan_number", "id_number", "passport_number",
+    "driving_license_number"
+}
+
+ALLOWED_CHAT_FIELDS = {
+    "annual_income", "occupation", "blood_group", "vehicle_class",
+    "remarks", "declared_income", "employment_type"
+}
+
+
+async def update_application_field(
+    db: AsyncSession,
+    application_id: str,
+    field: str,
+    value: Any,
+    citizen_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Persists a citizen-provided form data field to Application.form_data.
+    Rejects document/OCR-only fields to preserve authoritative evidence integrity.
+    Recomputes application readiness and missing fields.
+    """
+    try:
+        app_uuid = uuid.UUID(str(application_id))
+    except ValueError:
+        return {"error": "Invalid application_id UUID format."}
+
+    field_clean = field.strip().lower()
+
+    if field_clean in DOCUMENT_ONLY_FIELDS or field_clean not in ALLOWED_CHAT_FIELDS:
+        return {
+            "error": f"Field '{field}' cannot be provided via chat. Official document verification is required.",
+            "field": field,
+            "allowed": False
+        }
+
+    from sqlalchemy.orm import selectinload
+    result = await db.execute(
+        select(Application)
+        .options(selectinload(Application.service), selectinload(Application.linked_documents))
+        .where(Application.id == app_uuid)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        return {"error": f"Application '{application_id}' not found."}
+
+    # Ownership check: Application.user_id must match authenticated citizen_id
+    if citizen_id is not None and str(app.user_id) != str(citizen_id):
+        return {"error": "Unauthorized: Application does not belong to the authenticated citizen."}
+
+    service_code = app.service.code if app.service else None
+
+    # Persist the field in app.form_data
+    form_data = dict(app.form_data or {})
+    form_data[field_clean] = value
+    app.form_data = form_data
+
+    # Re-evaluate application state with workflow engine
+    engine = WorkflowEngine(db)
+    await engine.advance_application(app.id)
+
+    await db.commit()
+    await db.refresh(app)
+
+    # Directly query verified documents linked to this application without triggering relationship lazy loads
+    doc_res = await db.execute(
+        select(Document).where(
+            Document.application_id == app.id,
+            Document.verification_status == "VERIFIED"
+        )
+    )
+    verified_docs = doc_res.scalars().all()
+
+    # Recompute missing fields using shared helper combining form_data and verified documents
+    from app.service_rules import get_requirements as get_rules_requirements, compute_application_missing_fields
+    reqs = await get_rules_requirements(service_code or "income_certificate", db=db)
+    required_fields = reqs.get("required_fields", [])
+    remaining_missing_fields = compute_application_missing_fields(
+        required_fields, app.form_data, verified_docs
+    )
+
+    await log_audit_event(
+        db,
+        actor_type="CITIZEN",
+        action="UPDATE_APPLICATION_FIELD",
+        resource_type="application",
+        resource_id=str(app.id),
+        user_id=app.user_id,
+        details={"field": field_clean, "value": str(value)}
+    )
+
+    return {
+        "success": True,
+        "application_id": str(app.id),
+        "field": field_clean,
+        "value": value,
+        "status": app.status,
+        "form_data": app.form_data,
+        "missing_fields": remaining_missing_fields,
+        "message": f"Field '{field_clean}' successfully saved."
+    }
+
+
+tool_update_application_field = update_application_field
+

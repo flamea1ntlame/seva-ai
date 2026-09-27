@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.models import Application, Service, Document, ApplicationEvent, Consent
 from app.workflows.engine import ApplicationState
@@ -14,7 +15,11 @@ class ApplicationSubmissionService:
         self.db = db
 
     async def submit(self, application_id: uuid.UUID, actor_type: str = "SYSTEM", actor_id: Optional[str] = None) -> Dict[str, Any]:
-        result = await self.db.execute(select(Application).where(Application.id == application_id))
+        result = await self.db.execute(
+            select(Application)
+            .options(selectinload(Application.service), selectinload(Application.linked_documents))
+            .where(Application.id == application_id)
+        )
         app = result.scalar_one_or_none()
         if not app:
             return {"error": f"Application '{application_id}' not found."}
@@ -28,8 +33,7 @@ class ApplicationSubmissionService:
                 "message": "Application is already submitted."
             }
 
-        # Consent checks
-        # Need to verify if there is an APPROVED consent
+        # Consent checks: verify if there is an APPROVED consent
         result = await self.db.execute(
             select(Consent).where(
                 Consent.application_id == app.id,
@@ -40,36 +44,28 @@ class ApplicationSubmissionService:
         if not approved_consent:
             return {"error": "No approved consent found for this application."}
 
-        # Re-build profile to check for changes
-        result = await self.db.execute(select(Service).where(Service.id == app.service_id))
-        service = result.scalar_one_or_none()
+        # Service
+        service = app.service
+        if not service:
+            result = await self.db.execute(select(Service).where(Service.id == app.service_id))
+            service = result.scalar_one_or_none()
+        if not service:
+            return {"error": "Service associated with application not found."}
 
-        result = await self.db.execute(select(Document).where(Document.user_id == app.user_id))
-        docs = result.scalars().all()
-        
-        uploaded_doc_types = {doc.document_type for doc in docs}
-        verified_docs = [doc for doc in docs if doc.verification_status == "VERIFIED"]
-        
-        merged_profile = {}
-        for doc in verified_docs:
-            if doc.extracted_data and isinstance(doc.extracted_data, dict):
-                for key, val in doc.extracted_data.items():
-                    if val is not None and key not in merged_profile:
-                        merged_profile[key] = val
-
-        # Compare merged_profile and uploaded_doc_types against snapshot
-        snapshot = approved_consent.data_snapshot
+        # Application-scoped document set (strictly linked documents, matching tool_request_consent)
+        docs = app.linked_documents or []
         doc_identities = []
-        for doc in sorted(verified_docs, key=lambda d: str(d.id)):
+        for doc in sorted(docs, key=lambda d: str(d.id)):
             doc_identities.append({"id": str(doc.id), "type": doc.document_type})
-            
+
         current_data = {
             "application_id": str(app.id),
-            "form_data": merged_profile,
+            "form_data": app.form_data or {},
             "documents": doc_identities
         }
-        
-        # Simple deterministic equality
+
+        # Strict deterministic equality with consent snapshot
+        snapshot = approved_consent.data_snapshot
         if snapshot != current_data:
             return {"error": "CONSENT_INVALIDATED_DATA_CHANGED"}
 

@@ -6,7 +6,9 @@ from httpx import AsyncClient
 async def test_health_check(client: AsyncClient):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "commit_sha" in data
 
 
 @pytest.mark.asyncio
@@ -61,3 +63,40 @@ async def test_protected_endpoints_unauthorized(client: AsyncClient):
 
     response_apps = await client.get("/api/applications/")
     assert response_apps.status_code == 401
+
+
+def test_production_secret_validation(monkeypatch):
+    from app.config import Settings
+    import pytest
+
+    # 1. Production with default key must fail startup
+    with pytest.raises(ValueError, match="Production configuration error") as exc_info:
+        Settings(
+            ENVIRONMENT="production",
+            SECRET_KEY="super-secret-key-change-in-production-seva-ai"
+        )
+    # Ensure secret is not exposed in error message
+    assert "super-secret-key-change-in-production-seva-ai" not in str(exc_info.value)
+
+    # 2. Production with empty key must fail startup
+    with pytest.raises(ValueError, match="Production configuration error"):
+        Settings(ENVIRONMENT="production", SECRET_KEY="")
+
+    # 3. Production with known default key must fail startup
+    with pytest.raises(ValueError, match="Production configuration error"):
+        Settings(ENVIRONMENT="production", SECRET_KEY="changeme")
+
+    # 4. Production with strong key must succeed
+    prod_settings = Settings(
+        ENVIRONMENT="production",
+        SECRET_KEY="a-very-strong-and-secure-production-secret-key-12345"
+    )
+    assert prod_settings.ENVIRONMENT == "production"
+
+    # 5. Development with default key must succeed
+    dev_settings = Settings(
+        ENVIRONMENT="development",
+        SECRET_KEY="super-secret-key-change-in-production-seva-ai"
+    )
+    assert dev_settings.ENVIRONMENT == "development"
+

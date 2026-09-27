@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import User, Application, Service, ApplicationEvent
 from app.schemas import ApplicationRead, ApplicationCreate
 from app.auth import get_current_user
+from app.workflows.engine import ApplicationState
 
 router = APIRouter(prefix="/applications", tags=["Applications"])
 
@@ -43,12 +44,13 @@ async def create_application(
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
+    initial_status = ApplicationState.COLLECTING_DOCUMENTS
     app_obj = Application(
         application_number=generate_application_number(),
         user_id=current_user.id,
         service_id=app_in.service_id,
-        status="submitted",
-        form_data=app_in.form_data,
+        status=initial_status,
+        form_data=app_in.form_data or {},
         remarks=app_in.remarks,
     )
     db.add(app_obj)
@@ -56,14 +58,31 @@ async def create_application(
 
     event = ApplicationEvent(
         application_id=app_obj.id,
-        event_type="application_submitted",
+        event_type="application_created",
         previous_status=None,
-        new_status="submitted",
+        new_status=initial_status,
         created_by=current_user.id,
     )
     db.add(event)
 
+    from app.audit import log_audit_event
+    await log_audit_event(
+        db,
+        actor_type="CITIZEN",
+        action="CREATE_APPLICATION",
+        resource_type="application",
+        resource_id=str(app_obj.id),
+        user_id=current_user.id,
+        details={"service_code": service.code}
+    )
+
     await db.commit()
+    await db.refresh(app_obj)
+
+    # Advance workflow based on citizen's verified documents/fields
+    from app.workflows.engine import WorkflowEngine
+    engine = WorkflowEngine(db)
+    await engine.advance_application(app_obj.id)
     await db.refresh(app_obj)
     
     # Reload with service relation
@@ -121,7 +140,11 @@ async def get_application_audit_logs(
 ):
     """Get audit timeline for an application."""
     # Verify application belongs to user
-    result = await db.execute(select(Application).where(Application.id == application_id))
+    result = await db.execute(
+        select(Application)
+        .options(selectinload(Application.linked_documents))
+        .where(Application.id == application_id)
+    )
     app = result.scalar_one_or_none()
     
     if not app:
@@ -130,24 +153,41 @@ async def get_application_audit_logs(
     if app.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this application")
         
-    # Get all audit logs linked to this application ID
-    from app.models import AuditLog
-    
-    # We query by resource_type="application" AND resource_id=application_id OR action linked to its docs/consent
-    # For simplicity, we can fetch all audit logs where user_id == current_user.id and then filter,
-    # but it's better to query by resource_type & id. However, docs/consents have their own resource_ids.
-    # But actually, the audit logs we added for REQUEST_CONSENT etc use resource_type="application", resource_id=application_id
-    # Wait, we logged DOCUMENT_VERIFIED with resource_type="document". 
-    # Let's just fetch all audit logs for the user for the prototype, or we can look up by application.
-    # To be precise, fetching all audit logs for this application involves joining or just fetching the user's logs and picking relevant ones.
-    # For the MVP, we'll fetch logs where user_id = current_user.id. Since the UI is scoped to an application, 
-    # we ideally want only logs related to this application. 
-    # Since this is a prototype, I'll fetch user's logs ordered by time.
-    
-    # Better approach: We explicitly query logs related to the user and sort chronologically.
+    from app.models import AuditLog, Consent, Document
+    from sqlalchemy import or_
+
+    consent_result = await db.execute(
+        select(Consent.id).where(Consent.application_id == app.id)
+    )
+    consent_ids = [str(cid) for cid in consent_result.scalars().all()]
+
+    doc_result = await db.execute(
+        select(Document.id).where(Document.application_id == app.id)
+    )
+    doc_ids = set(str(did) for did in doc_result.scalars().all())
+    if app.linked_documents:
+        for d in app.linked_documents:
+            doc_ids.add(str(d.id))
+
+    app_id_str = str(app.id)
+    conditions = [
+        (AuditLog.resource_type == "application") & (AuditLog.resource_id == app_id_str)
+    ]
+    if consent_ids:
+        conditions.append(
+            (AuditLog.resource_type == "consent") & (AuditLog.resource_id.in_(consent_ids))
+        )
+    if doc_ids:
+        conditions.append(
+            (AuditLog.resource_type == "document") & (AuditLog.resource_id.in_(list(doc_ids)))
+        )
+
     result = await db.execute(
         select(AuditLog)
-        .where(AuditLog.user_id == current_user.id)
+        .where(
+            or_(*conditions),
+            (AuditLog.user_id == current_user.id) | (AuditLog.user_id.is_(None))
+        )
         .order_by(AuditLog.created_at.asc())
     )
     logs = result.scalars().all()

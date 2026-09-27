@@ -104,13 +104,18 @@ async def upload_document(
         
         # Verify that application belongs to current_user
         app_res = await db.execute(
-            select(Application).where(Application.id == app_uuid, Application.user_id == current_user.id)
+            select(Application).where(Application.id == app_uuid)
         )
         owned_app = app_res.scalar_one_or_none()
         if not owned_app:
             raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Application not found."
+            )
+        if owned_app.user_id != current_user.id:
+            raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Forbidden: Application not found or does not belong to you."
+                detail="Forbidden: Application does not belong to you."
             )
 
     # 3. Filename Sanitization
@@ -166,6 +171,8 @@ async def upload_document(
             detected_mime = "image/jpeg"
         elif header_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
             detected_mime = "image/png"
+        elif safe_filename.endswith(".txt") or (file.filename and file.filename.endswith(".txt")):
+            detected_mime = "text/plain"
         else:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

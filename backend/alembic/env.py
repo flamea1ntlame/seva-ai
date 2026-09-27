@@ -24,19 +24,30 @@ target_metadata = Base.metadata
 
 
 def get_url():
-    url = settings.SYNC_DATABASE_URL
-    if url.startswith("postgresql+asyncpg"):
-        url = url.replace("postgresql+asyncpg", "postgresql")
+    url = settings.SYNC_DATABASE_URL or settings.DATABASE_URL
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+        if scheme in (
+            "postgresql",
+            "postgres",
+            "postgresql+asyncpg",
+            "postgresql+psycopg",
+            "postgresql+psycopg3",
+            "postgresql+psycopg2",
+        ):
+            return f"postgresql+psycopg2://{rest}"
     return url
 
 
 def run_migrations_offline() -> None:
     url = get_url()
+    is_sqlite = "sqlite" in url
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=is_sqlite,
     )
 
     with context.begin_transaction():
@@ -53,8 +64,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        is_sqlite = connection.dialect.name == "sqlite"
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=is_sqlite,
         )
 
         with context.begin_transaction():

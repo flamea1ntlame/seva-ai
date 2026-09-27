@@ -12,6 +12,7 @@ from app.workflows.engine import ApplicationState
 from app.agent.tools import tool_submit_application
 from app.main import app
 import httpx
+from httpx import AsyncClient
 
 @pytest.fixture
 async def connector_user(db_session: AsyncSession) -> User:
@@ -40,10 +41,10 @@ async def connector_service(db_session: AsyncSession) -> Service:
     return service
 
 
-def test_mock_api_revenue():
-    client = TestClient(app)
+@pytest.mark.asyncio
+async def test_mock_api_revenue(client: AsyncClient):
     # Test submit
-    resp = client.post("/mock/revenue/submit", json={"application_id": "test", "form_data": {}, "documents": []})
+    resp = await client.post("/mock/revenue/submit", json={"application_id": "test", "form_data": {}, "documents": []})
     assert resp.status_code == 200
     data = resp.json()
     assert "reference_id" in data
@@ -52,12 +53,12 @@ def test_mock_api_revenue():
     ref_id = data["reference_id"]
     
     # Test status
-    resp = client.get(f"/mock/revenue/status/{ref_id}")
+    resp = await client.get(f"/mock/revenue/status/{ref_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "SUBMITTED"
     
     # Test admin advance
-    resp = client.post(f"/mock/revenue/admin/advance-status/{ref_id}")
+    resp = await client.post(f"/mock/revenue/admin/advance-status/{ref_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "UNDER_REVIEW"
 

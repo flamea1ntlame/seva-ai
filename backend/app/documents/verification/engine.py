@@ -68,6 +68,22 @@ class DocumentVerificationEngine:
         effective_type = detected_type if detected_type in self._validators else canonicalize_document_type(extraction.document_type)
 
         if effective_type not in self._validators:
+            if effective_type in (
+                "identity_proof", "address_proof", "income_proof",
+                "hospital_certificate", "medical_declaration", "photograph",
+                "parent_identity_proof", "parent_guardian_consent", "learner_licence"
+            ):
+                return DocumentVerificationResult(
+                    status=DocumentVerificationStatus.EXTRACTED,
+                    is_authentic=False,
+                    methods=methods,
+                    verified_at=timestamp,
+                    checks_passed=checks_passed,
+                    checks_failed=checks_failed,
+                    risk_flags=risk_flags,
+                    failure_reason=None
+                )
+
             checks_failed.append("unsupported_government_document_type")
             risk_flags.append("UNSUPPORTED_DOCUMENT_TYPE")
             return DocumentVerificationResult(

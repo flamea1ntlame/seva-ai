@@ -1,78 +1,96 @@
+"use client";
+
 import React from "react";
-import { CheckCircle2, Clock, XCircle, Circle } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, Circle, AlertTriangle, ShieldCheck } from "lucide-react";
+import { getApplicationStatusInfo } from "@/lib/statusMapping";
 
 export default function ApplicationTimeline({ application }: { application: any }) {
-  // SEVA status dictates if it reached the government submission gate
-  const isSubmitted = ["SUBMITTED", "TRACKING", "COMPLETED"].includes(application.status);
-  
-  // Government status logic
-  const isUnderReview = application.government_status === "UNDER_REVIEW" || application.government_status === "APPROVED" || application.government_status === "REJECTED";
-  const isApproved = application.government_status === "APPROVED";
-  const isRejected = application.government_status === "REJECTED";
+  if (!application) return null;
 
-  if (!isSubmitted && application.status !== "COMPLETED") {
-    return null; // Timeline only shows post-submission tracking
-  }
+  const info = getApplicationStatusInfo(application.status, application.government_status);
+  const currentStage = info.stageNumber; // 1 to 9
+  const isRejected = (application.government_status || "").toUpperCase() === "REJECTED";
 
-  const steps = [
+  // The 5 Major Milestone stages for the high-level citizen timeline
+  const milestones = [
     {
+      stage: 1,
+      minStage: 1,
+      label: "Application Started",
+      subtext: "Initiated",
+    },
+    {
+      stage: 3,
+      minStage: 3,
+      label: "Documents Provided",
+      subtext: "Uploaded to vault",
+    },
+    {
+      stage: 4,
+      minStage: 4,
+      label: "Rules Verified",
+      subtext: "Requirements met",
+    },
+    {
+      stage: 7,
+      minStage: 7,
       label: "Submitted",
-      completed: isSubmitted,
-      active: application.status === "SUBMITTED" && !application.government_status,
-      rejected: false,
+      subtext: "Sent to department",
     },
     {
-      label: "Government Received",
-      completed: isUnderReview || isApproved || isRejected || application.government_status === "SUBMITTED",
-      active: application.government_status === "SUBMITTED",
-      rejected: false,
+      stage: 8,
+      minStage: 8,
+      label: isRejected ? "Rejected" : "Officer Processing",
+      subtext: isRejected ? "Action needed" : "Under review",
+      isRejected,
     },
     {
-      label: "Under Review",
-      completed: isApproved || isRejected,
-      active: application.government_status === "UNDER_REVIEW",
-      rejected: false,
-    },
-    {
-      label: isRejected ? "Rejected" : (isApproved ? "Approved" : "Decision"),
-      completed: isApproved || isRejected,
-      active: false,
-      rejected: isRejected,
+      stage: 9,
+      minStage: 9,
+      label: "Completed",
+      subtext: "Certificate issued",
     },
   ];
 
   return (
-    <div className="pt-4 pb-2">
-      <div className="flex justify-between items-center relative px-2">
-        {/* Background line */}
-        <div className="absolute left-6 right-6 top-[9px] h-0.5 bg-brand-200 -z-10"></div>
-        
-        {steps.map((step, idx) => {
+    <div className="pt-2 pb-4">
+      <div className="flex justify-between items-start relative px-2">
+        {/* Background connector line */}
+        <div className="absolute left-8 right-8 top-3 h-0.5 bg-slate-200 -z-0"></div>
+
+        {milestones.map((m, idx) => {
+          const isPassed = currentStage > m.minStage && (!m.isRejected || isRejected);
+          const isCurrent = currentStage >= m.minStage && (idx === milestones.length - 1 || currentStage < milestones[idx + 1].minStage);
+          const isFailed = m.isRejected && isRejected;
+
           let Icon = Circle;
-          let colorClass = "text-brand-300 bg-white border-brand-200";
-          let labelColor = "text-brand-400";
-          
-          if (step.rejected) {
+          let iconClass = "text-slate-300 bg-white";
+          let labelClass = "text-slate-400 font-medium";
+
+          if (isFailed) {
             Icon = XCircle;
-            colorClass = "text-error-500 bg-white";
-            labelColor = "text-error-600 font-bold";
-          } else if (step.completed) {
+            iconClass = "text-rose-600 bg-white";
+            labelClass = "text-rose-700 font-bold";
+          } else if (isPassed) {
             Icon = CheckCircle2;
-            colorClass = "text-success-500 bg-white";
-            labelColor = "text-success-600 font-bold";
-          } else if (step.active) {
+            iconClass = "text-emerald-600 bg-white";
+            labelClass = "text-emerald-800 font-bold";
+          } else if (isCurrent) {
             Icon = Clock;
-            colorClass = "text-primary-500 bg-white animate-pulse";
-            labelColor = "text-primary-600 font-bold";
+            iconClass = "text-indigo-600 bg-white animate-pulse";
+            labelClass = "text-indigo-900 font-bold";
           }
 
           return (
-            <div key={idx} className="flex flex-col items-center z-10 w-20">
-              <div className="bg-white px-1">
-                <Icon className={`h-5 w-5 ${colorClass}`} fill="currentColor" stroke="white" strokeWidth={2} />
+            <div key={idx} className="flex flex-col items-center z-10 w-24 text-center">
+              <div className="bg-white p-0.5 rounded-full">
+                <Icon className={`h-5 w-5 ${iconClass}`} />
               </div>
-              <span className={`text-[10px] mt-2 text-center uppercase tracking-wider ${labelColor}`}>
-                {step.label}
+              <span className={`text-[11px] mt-1.5 leading-tight ${labelClass}`}>
+                {m.label}
+              </span>
+              <span className="text-[9px] text-slate-400 font-medium hidden sm:block mt-0.5">
+                {m.subtext}
               </span>
             </div>
           );

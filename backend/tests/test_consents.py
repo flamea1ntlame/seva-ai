@@ -10,6 +10,7 @@ from app.auth import create_access_token
 from app.models import User, Service
 from unittest.mock import patch, MagicMock, AsyncMock
 import uuid
+from datetime import datetime
 
 @pytest.fixture
 async def test_citizen(db_session: AsyncSession):
@@ -326,3 +327,110 @@ async def test_data_modification_invalidates_consent(db_session: AsyncSession, t
 
     await db_session.refresh(app)
     assert app.status == ApplicationState.READY_FOR_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_submission_service_scoped_to_application_documents(db_session: AsyncSession, test_citizen, test_service):
+    # Setup application
+    app_id = uuid.uuid4()
+    app = Application(
+        id=app_id,
+        application_number="TEST-APP-SUBMIT-SCOPE",
+        user_id=test_citizen.id,
+        service_id=test_service.id,
+        status=ApplicationState.DISCOVER,
+        form_data={"annual_income": "75000"}
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    # Document 1: linked to this application
+    doc1 = Document(
+        id=uuid.uuid4(),
+        user_id=test_citizen.id,
+        application_id=app_id,
+        document_type="identity_proof",
+        title="ID Proof",
+        file_path="/id1.pdf",
+        verification_status="VERIFIED",
+        extracted_data={"name": "Rahul Kumar"}
+    )
+    doc2 = Document(
+        id=uuid.uuid4(),
+        user_id=test_citizen.id,
+        application_id=app_id,
+        document_type="income_proof",
+        title="Income Proof",
+        file_path="/inc1.pdf",
+        verification_status="VERIFIED",
+        extracted_data={"annual_income": "75000"}
+    )
+    db_session.add_all([doc1, doc2])
+
+    # Unrelated document: belongs to citizen but for a different application / vault
+    other_app_id = uuid.uuid4()
+    unrelated_doc = Document(
+        id=uuid.uuid4(),
+        user_id=test_citizen.id,
+        application_id=other_app_id,
+        document_type="driving_license",
+        title="DL",
+        file_path="/dl.pdf",
+        verification_status="VERIFIED",
+        extracted_data={"license_number": "DL12345"}
+    )
+    db_session.add(unrelated_doc)
+    await db_session.commit()
+
+    # Advance workflow engine to READY_FOR_REVIEW
+    engine = WorkflowEngine(db_session)
+    await engine.advance_application(app.id)
+    await db_session.refresh(app)
+    assert app.status == ApplicationState.READY_FOR_REVIEW
+
+    # Request consent using tool_request_consent
+    res = await tool_request_consent(
+        db_session,
+        application_id=str(app.id),
+        data_requested=["identity_proof", "income_proof"],
+        requesting_department="Revenue",
+        purpose="Income Verification",
+        citizen_id=str(test_citizen.id)
+    )
+    assert "consent_id" in res
+    consent_id = uuid.UUID(res["consent_id"])
+
+    # Verify snapshot documents contains ONLY the 2 linked documents, NOT unrelated_doc
+    consent = await db_session.get(Consent, consent_id)
+    snapshot_doc_ids = [d["id"] for d in consent.data_snapshot["documents"]]
+    assert str(unrelated_doc.id) not in snapshot_doc_ids
+    assert len(snapshot_doc_ids) == 2
+
+    # Approve consent
+    consent.status = "APPROVED"
+    consent.responded_at = datetime.utcnow()
+    await db_session.commit()
+
+    # Mock connector submission
+    with patch("app.workflows.application_submission.get_connector") as mock_get_conn:
+        mock_conn = MagicMock()
+        mock_conn.submit_application = AsyncMock(return_value={"reference_id": "GOV-REV-8888", "status": "SUBMITTED"})
+        mock_get_conn.return_value = mock_conn
+
+        submission_svc = ApplicationSubmissionService(db_session)
+        submit_res = await submission_svc.submit(app.id)
+
+        # Submission should succeed without being corrupted by unrelated_doc
+        assert "error" not in submit_res
+        assert submit_res["government_reference"] == "GOV-REV-8888"
+
+    # Test rejection when application data changes after consent snapshot
+    app.government_reference = None
+    app.status = ApplicationState.READY_FOR_REVIEW
+    app.form_data = {"annual_income": "999999"} # Altered data
+    await db_session.commit()
+
+    submission_svc = ApplicationSubmissionService(db_session)
+    diverged_res = await submission_svc.submit(app.id)
+    assert diverged_res.get("error") == "CONSENT_INVALIDATED_DATA_CHANGED"
+

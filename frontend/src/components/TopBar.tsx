@@ -31,6 +31,7 @@ export default function TopBar() {
         <div className="bg-brand-800 absolute top-[52px] left-0 w-full z-10 shadow-lg border-b border-brand-700">
           <div className="p-2 space-y-1">
             <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2.5 text-sm font-medium text-brand-200 hover:bg-brand-700 rounded-md">Dashboard</Link>
+            <Link href="/services" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2.5 text-sm font-medium text-brand-200 hover:bg-brand-700 rounded-md">Services</Link>
             <Link href="/applications" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2.5 text-sm font-medium text-brand-200 hover:bg-brand-700 rounded-md">Applications</Link>
             <Link href="/documents" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2.5 text-sm font-medium text-brand-200 hover:bg-brand-700 rounded-md">Documents</Link>
             <Link href="/activity" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2.5 text-sm font-medium text-brand-200 hover:bg-brand-700 rounded-md">Activity</Link>

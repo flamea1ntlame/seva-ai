@@ -152,6 +152,8 @@ def test_3_ll_minor_consent_condition_applies():
     # Check conditional rules from learner_license.json
     import json, os
     kb_path = "service_catalog/services/karnataka/learner_license.json"
+    if not os.path.exists(kb_path):
+        kb_path = os.path.join(os.path.dirname(__file__), "..", "..", "service_catalog", "services", "karnataka", "learner_license.json")
     data = json.load(open(kb_path))
     consent_req = next(r for r in data["requirements"] if r.get("document") == "parent_guardian_consent")
     assert consent_req["type"] == "CONDITIONAL"
@@ -161,8 +163,10 @@ def test_3_ll_minor_consent_condition_applies():
 
 # TEST 4: User requests Learner Licence. MCWOG age 16, >50cc. -> must NOT incorrectly allow the <=50cc minor rule.
 def test_4_ll_minor_over_50cc_disallowed():
-    import json
+    import json, os
     kb_path = "service_catalog/services/karnataka/learner_license.json"
+    if not os.path.exists(kb_path):
+        kb_path = os.path.join(os.path.dirname(__file__), "..", "..", "service_catalog", "services", "karnataka", "learner_license.json")
     data = json.load(open(kb_path))
     consent_req = next(r for r in data["requirements"] if r.get("document") == "parent_guardian_consent")
     # Condition explicitly specifies MCWOG <= 50cc; motor vehicles > 50cc require age >= 18 under §4(1)

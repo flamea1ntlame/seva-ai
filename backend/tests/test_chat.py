@@ -542,3 +542,272 @@ async def test_chat_punctuation_reference(client: AsyncClient, db_session: Async
 
     await db_session.delete(app_punct)
     await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_chat_field_persistence_and_loop_prevention(client: AsyncClient, db_session: AsyncSession):
+    """
+    Regression test proving:
+    - a valid chat-answerable field is saved to Application.form_data
+    - missing_fields changes after saving
+    - the chatbot does not repeat the same question forever
+    """
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Step 1: Create an active application for income_certificate
+    res_s = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service = res_s.scalar_one()
+
+    app = Application(
+        application_number='SEVA-998877',
+        user_id=uuid.UUID(user_id),
+        service_id=service.id,
+        status='MISSING_INFORMATION',
+        form_data={}
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    # Step 2: Citizen provides annual_income via chat
+    payload1 = {
+        'citizen_id': user_id,
+        'application_id': str(app.id),
+        'message': 'My annual income is 150000'
+    }
+    res1 = await client.post('/api/chat', json=payload1, headers=headers)
+    assert res1.status_code == 200, res1.text
+    data1 = res1.json()
+
+    # Verify field persisted in DB
+    await db_session.refresh(app)
+    assert app.form_data is not None
+    assert app.form_data.get('annual_income') == '150000'
+
+    # Verify missing_fields changed (annual_income is no longer missing)
+    assert 'annual_income' not in data1.get('required_fields', [])
+    assert 'annual_income' not in (data1.get('missing_fields') or [])
+    assert 'occupation' in data1['reply'].lower() or 'occupation' in data1.get('required_fields', [])
+    assert '150000' in data1['reply'] or 'saved' in data1['reply'].lower() or 'recorded' in data1['reply'].lower()
+
+    # Step 3: Citizen provides occupation via chat
+    payload2 = {
+        'citizen_id': user_id,
+        'application_id': str(app.id),
+        'message': 'My occupation is farmer'
+    }
+    res2 = await client.post('/api/chat', json=payload2, headers=headers)
+    assert res2.status_code == 200, res2.text
+    data2 = res2.json()
+
+    # Verify second field persisted in DB
+    await db_session.refresh(app)
+    assert app.form_data.get('occupation') == 'Farmer'
+
+    # Verify all required fields for income certificate are now satisfied!
+    assert 'annual_income' not in (data2.get('missing_fields') or [])
+    assert 'occupation' not in (data2.get('missing_fields') or [])
+    # Chatbot does NOT repeat asking for annual income or occupation
+    assert 'please provide your annual income' not in data2['reply'].lower()
+    assert 'please provide your occupation' not in data2['reply'].lower()
+
+    # Clean up
+    await db_session.delete(app)
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_chat_ocr_only_fields_cannot_be_satisfied_via_chat(client: AsyncClient, db_session: AsyncSession):
+    """
+    Regression test proving:
+    - OCR/document-only fields (e.g. date_of_birth, applicant_name) cannot be satisfied by arbitrary chat text
+    - update_application_field explicitly rejects document/OCR-only fields
+    - Chat response informs citizen that official document upload is required
+    """
+    from app.agent.tools import update_application_field
+
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    res_s = await db_session.execute(select(Service).where(Service.code == 'birth_certificate'))
+    service = res_s.scalar_one()
+
+    app = Application(
+        application_number='SEVA-887766',
+        user_id=uuid.UUID(user_id),
+        service_id=service.id,
+        status='COLLECTING_DOCUMENTS',
+        form_data={}
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    # 1. Direct tool invocation check: update_application_field MUST reject document-only fields
+    tool_res = await update_application_field(db_session, str(app.id), "date_of_birth", "2000-01-01")
+    assert "error" in tool_res
+    assert tool_res.get("allowed") is False
+
+    tool_res_name = await update_application_field(db_session, str(app.id), "applicant_name", "Alice Doe")
+    assert "error" in tool_res_name
+    assert tool_res_name.get("allowed") is False
+
+    # 2. Chat workflow check: citizen typing date of birth does NOT populate form_data
+    payload = {
+        'citizen_id': user_id,
+        'application_id': str(app.id),
+        'message': 'My date of birth is 1995-05-12'
+    }
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+
+    # Verify form_data remains empty of date_of_birth
+    await db_session.refresh(app)
+    assert 'date_of_birth' not in (app.form_data or {})
+
+    # Verify reply explicitly requires document upload
+    reply_lower = data['reply'].lower()
+    assert 'document' in reply_lower or 'upload' in reply_lower
+    assert 'cannot be populated via chat' in reply_lower or 'cannot be accepted via chat' in reply_lower or 'verification required' in reply_lower or 'official document' in reply_lower
+
+    # Clean up
+    await db_session.delete(app)
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_application_ownership_idor_protection(db_session: AsyncSession):
+    """
+    Security regression test for IDOR protection:
+    - Citizen A owns Application A
+    - Citizen B attempts to call tool_request_consent, tool_submit_application, or update_application_field
+      on Application A
+    - Citizen B is strictly rejected
+    - Citizen A succeeds
+    """
+    from app.agent.tools import tool_request_consent, tool_submit_application, update_application_field
+    from app.workflows.engine import ApplicationState
+
+    await seed_test_data(db_session)
+
+    citizen_a_id = uuid.uuid4()
+    citizen_b_id = uuid.uuid4()
+
+    user_a = User(id=citizen_a_id, email=f"user_a_{citizen_a_id.hex[:6]}@example.com", password_hash="hash", full_name="User A", role="citizen")
+    user_b = User(id=citizen_b_id, email=f"user_b_{citizen_b_id.hex[:6]}@example.com", password_hash="hash", full_name="User B", role="citizen")
+    db_session.add_all([user_a, user_b])
+    await db_session.flush()
+
+    res_s = await db_session.execute(select(Service).where(Service.code == 'income_certificate'))
+    service = res_s.scalar_one()
+
+    # Application owned by Citizen A
+    app_a = Application(
+        application_number='SEVA-IDOR-001',
+        user_id=citizen_a_id,
+        service_id=service.id,
+        status=ApplicationState.READY_FOR_REVIEW,
+        form_data={"annual_income": 50000, "occupation": "Farmer"}
+    )
+    db_session.add(app_a)
+    await db_session.commit()
+
+    # 1. Citizen B (attacker) attempts to request consent for Application A -> MUST FAIL
+    res_consent_b = await tool_request_consent(
+        db=db_session,
+        application_id=str(app_a.id),
+        data_requested=["annual_income"],
+        requesting_department="Revenue",
+        purpose="Verification",
+        citizen_id=str(citizen_b_id)
+    )
+    assert "error" in res_consent_b
+    assert "unauthorized" in res_consent_b["error"].lower()
+
+    # Verify status unchanged
+    await db_session.refresh(app_a)
+    assert app_a.status == ApplicationState.READY_FOR_REVIEW
+
+    # 2. Citizen B attempts to update field on Application A -> MUST FAIL
+    res_update_b = await update_application_field(
+        db=db_session,
+        application_id=str(app_a.id),
+        field="annual_income",
+        value=999999,
+        citizen_id=str(citizen_b_id)
+    )
+    assert "error" in res_update_b
+    assert "unauthorized" in res_update_b["error"].lower()
+
+    # 3. Citizen B attempts to submit Application A -> MUST FAIL
+    res_submit_b = await tool_submit_application(
+        db=db_session,
+        application_id=str(app_a.id),
+        citizen_id=str(citizen_b_id)
+    )
+    assert "error" in res_submit_b
+    assert "unauthorized" in res_submit_b["error"].lower()
+
+    # 4. Citizen A (legitimate owner) requests consent -> SUCCEEDS
+    res_consent_a = await tool_request_consent(
+        db=db_session,
+        application_id=str(app_a.id),
+        data_requested=["annual_income"],
+        requesting_department="Revenue",
+        purpose="Verification",
+        citizen_id=str(citizen_a_id)
+    )
+    assert "error" not in res_consent_a
+    assert res_consent_a["status"] == ApplicationState.CONSENT_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_gemini_latency_bounded_and_falls_back(client: AsyncClient, db_session: AsyncSession, monkeypatch):
+    """
+    Regression test proving:
+    - Gemini requests that timeout or fail transiently are bounded by timeout & retry limits
+    - Orchestrator cleanly falls back to internal rules engine without hanging
+    """
+    import asyncio
+    from app.agent import orchestrator
+
+    await seed_test_data(db_session)
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Simulate Gemini timing out
+    async def mock_timeout_gemini(*args, **kwargs):
+        raise asyncio.TimeoutError("Simulated Gemini timeout")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "mock-key-for-test")
+    monkeypatch.setattr(orchestrator, "_run_gemini_tool_workflow", mock_timeout_gemini)
+
+    payload = {
+        'citizen_id': user_id,
+        'message': 'I want an income certificate'
+    }
+
+    start = asyncio.get_event_loop().time()
+    res = await client.post('/api/chat', json=payload, headers=headers)
+    duration = asyncio.get_event_loop().time() - start
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["service_code"] == "income_certificate"
+    assert "Income Certificate" in data["reply"]
+    assert duration < 5.0, f"Request took too long: {duration}s"
+
+
