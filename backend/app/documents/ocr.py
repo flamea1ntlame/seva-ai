@@ -172,6 +172,24 @@ def perform_ocr(file_path: str) -> OCRResult:
 
         all_lines.extend(page_lines)
 
+    # 4. Fallback for digital PDFs if visual OCR yielded no text
+    if not all_lines and file_path.lower().endswith(".pdf"):
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(file_path)
+            for page_idx in range(len(pdf)):
+                textpage = pdf[page_idx].get_textpage()
+                txt = textpage.get_text_range()
+                if txt:
+                    for line in txt.splitlines():
+                        s = line.strip()
+                        if s:
+                            all_lines.append(OCRLine(text=s, confidence=0.99, bbox=[0, 0, 0, 0], page=page_idx + 1))
+            if all_lines:
+                used_engine = "pypdfium_text"
+        except Exception as pdf_err:
+            logger.warning(f"PDF direct text extraction fallback failed: {pdf_err}")
+
     # 5. Compute summary metrics
     total_conf = sum(l.confidence for l in all_lines)
     avg_conf = (total_conf / len(all_lines)) if all_lines else 0.0

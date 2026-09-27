@@ -1,5 +1,8 @@
 import os
-import cv2
+try:
+    import cv2
+except Exception:
+    cv2 = None
 import numpy as np
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
@@ -23,6 +26,9 @@ def analyze_qr_barcode(file_path: str, extracted_identifier: Optional[str] = Non
     """
     if not os.path.exists(file_path):
         return QROutcome(risk_flags=["FILE_NOT_FOUND"])
+
+    if cv2 is None:
+        return QROutcome(risk_flags=["QR_SCANNER_UNAVAILABLE"])
 
     checks_passed = []
     checks_failed = []
