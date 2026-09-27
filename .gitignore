@@ -50,8 +50,8 @@ next-env.d.ts
 .idea/
 
 # SEVA AI Custom Exclusions
-.env.*
-!.env.example
+.env*
 backend/uploads/
 logs/
 !frontend/src/lib/
+
