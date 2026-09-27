@@ -622,6 +622,93 @@ async def test_chat_field_persistence_and_loop_prevention(client: AsyncClient, d
 
 
 @pytest.mark.asyncio
+async def test_chat_field_annual_income_repeat_question_prevention(client: AsyncClient, db_session: AsyncSession):
+    """
+    Focused regression test for repeating-question bug:
+    Turn 1: 'I want an Income Certificate'
+    Turn 2: 'My annual income is 50000'
+    Turn 3: '50000'
+    Asserts:
+    - Application created
+    - annual_income persisted
+    - annual_income is NOT in missing_fields / required_fields
+    - Chatbot does NOT repeat asking for annual income
+    - Application ID remains present across turns
+    - Turn 3 does not corrupt or overwrite satisfied annual_income
+    - Next legitimate missing field ('occupation') is requested
+    """
+    await seed_test_data(db_session)
+
+    login_res = await client.post('/api/auth/login', json={'email': 'citizen@example.com', 'password': 'password123'})
+    token = login_res.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    me_res = await client.get('/api/auth/me', headers=headers)
+    user_id = me_res.json()['id']
+
+    # Turn 1: Citizen initiates Income Certificate
+    res1 = await client.post('/api/chat', json={
+        'citizen_id': user_id,
+        'message': 'I want an Income Certificate'
+    }, headers=headers)
+    assert res1.status_code == 200, res1.text
+    data1 = res1.json()
+    app_id = data1.get('application_id')
+    assert app_id is not None
+    assert data1['service_code'] == 'income_certificate'
+
+    # Turn 2: Citizen provides annual income
+    res2 = await client.post('/api/chat', json={
+        'citizen_id': user_id,
+        'application_id': app_id,
+        'message': 'My annual income is 50000'
+    }, headers=headers)
+    assert res2.status_code == 200, res2.text
+    data2 = res2.json()
+
+    # Application ID preserved
+    assert data2.get('application_id') == app_id
+
+    # Verify annual_income persisted in DB
+    app_res = await db_session.execute(select(Application).where(Application.id == uuid.UUID(app_id)))
+    app = app_res.scalar_one()
+    assert app.form_data is not None
+    assert app.form_data.get('annual_income') == '50000'
+
+    # annual_income NOT in missing_fields / required_fields
+    assert 'annual_income' not in (data2.get('missing_fields') or [])
+    assert 'annual_income' not in data2.get('required_fields', [])
+
+    # Chatbot does NOT ask for annual income again, but advances to occupation
+    assert 'please provide your annual income' not in data2['reply'].lower()
+    assert 'occupation' in data2['reply'].lower() or 'occupation' in data2.get('required_fields', [])
+
+    # Turn 3: Citizen sends '50000' (standalone number)
+    res3 = await client.post('/api/chat', json={
+        'citizen_id': user_id,
+        'application_id': app_id,
+        'message': '50000'
+    }, headers=headers)
+    assert res3.status_code == 200, res3.text
+    data3 = res3.json()
+
+    # Application ID preserved
+    assert data3.get('application_id') == app_id
+
+    # Verify annual_income was NOT corrupted
+    await db_session.refresh(app)
+    assert app.form_data.get('annual_income') == '50000'
+
+    # Chatbot still does not ask for annual income and asks for occupation
+    assert 'please provide your annual income' not in data3['reply'].lower()
+    assert 'occupation' in data3['reply'].lower()
+    assert 'annual_income' not in (data3.get('missing_fields') or [])
+
+    # Clean up
+    await db_session.delete(app)
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
 async def test_chat_ocr_only_fields_cannot_be_satisfied_via_chat(client: AsyncClient, db_session: AsyncSession):
     """
     Regression test proving:

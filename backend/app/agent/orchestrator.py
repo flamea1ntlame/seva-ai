@@ -127,20 +127,60 @@ async def run_agent_workflow(
     if active_apps:
         app_context_str = "\n\nCURRENT APPLICATION CONTEXT:\nThe user has the following active/existing applications:\n"
         for app in active_apps:
+            # Query verified documents for this app to accurately compute remaining missing fields
+            doc_res = await db.execute(
+                select(Document).where(
+                    Document.application_id == app.id,
+                    Document.verification_status == "VERIFIED"
+                )
+            )
+            app_verified_docs = doc_res.scalars().all()
+            app_req_fields = app.service.required_fields if app.service and app.service.required_fields else []
+            app_missing_fields = compute_application_missing_fields(
+                app_req_fields, app.form_data, app_verified_docs
+            )
+
             app_context_str += (
-                f"- Application Reference: {app.application_number} (ID: {app.id})\n"
-                f"  Service: {app.service.title} ({app.service.code})\n"
-                f"  Status: {app.status}\n"
+                f"Application Reference: {app.application_number}\n"
+                f"Application ID: {app.id}\n"
+                f"Service: {app.service.title if app.service else 'Unknown'} ({app.service.code if app.service else 'unknown'})\n"
+                f"Status: {app.status}\n"
             )
             if app.government_reference:
-                app_context_str += f"  Gov Reference: {app.government_reference}\n"
-        app_context_str += "\nUse this context to resolve references to 'my application'."
+                app_context_str += f"Gov Reference: {app.government_reference}\n"
+
+            saved_lines = []
+            if app.form_data and isinstance(app.form_data, dict):
+                for k, v in app.form_data.items():
+                    if v is not None and str(v).strip() and not k.startswith("_"):
+                        saved_lines.append(f"- {k}: {v}")
+
+            if saved_lines:
+                app_context_str += "Saved Information:\n" + "\n".join(saved_lines) + "\n"
+            else:
+                app_context_str += "Saved Information: (None yet)\n"
+
+            if app_missing_fields:
+                app_context_str += "Remaining Missing Fields:\n" + "\n".join([f"- {f}" for f in app_missing_fields]) + "\n"
+            else:
+                app_context_str += "Remaining Missing Fields: (All required information complete)\n"
+
+            app_context_str += "\n"
+        app_context_str += "Use this context to resolve references to 'my application' and check already satisfied fields."
 
     result: Dict[str, Any]
     if api_key:
         try:
             result = await _run_gemini_tool_workflow(
-                normalized_message, match_result, citizen_id, db, api_key, model_name, app_context_str, chat_history
+                normalized_message,
+                match_result,
+                citizen_id,
+                db,
+                api_key,
+                model_name,
+                app_context_str,
+                chat_history,
+                active_apps=active_apps
             )
         except Exception as e:
             logger.warning(f"Gemini API call failed: {e}. Falling back to internal engine.")
@@ -318,6 +358,9 @@ async def _run_gemini_tool_workflow(
             if len(args) > 3: model_name = args[3]
             if len(args) > 4: app_context_str = args[4]
             if len(args) > 5: chat_history = args[5]
+
+    active_apps = kwargs.get("active_apps") or []
+    target_app = active_apps[0] if active_apps else None
 
     if match_result is None:
         from app.nlp.matcher import match_intent_and_service
@@ -507,13 +550,40 @@ async def _run_gemini_tool_workflow(
             "verified_jurisdictions": service_reqs.get("supported_jurisdictions", ["Karnataka", "Maharashtra", "Delhi"])
         }
 
+    resolved_app_id = None
+    if created_app_info and created_app_info.get("application_id"):
+        resolved_app_id = created_app_info["application_id"]
+    elif target_app:
+        resolved_app_id = str(target_app.id)
+
+    # Compute remaining missing fields dynamically
+    remaining_missing_fields = []
+    if target_app and db:
+        await db.refresh(target_app)
+        doc_res = await db.execute(
+            select(Document).where(
+                Document.application_id == target_app.id,
+                Document.verification_status == "VERIFIED"
+            )
+        )
+        verified_docs = doc_res.scalars().all()
+        all_req_fields = service_reqs.get("required_fields", []) if (service_reqs and service_reqs.get("jurisdiction_supported", True)) else (target_app.service.required_fields if target_app.service else [])
+        remaining_missing_fields = compute_application_missing_fields(
+            all_req_fields or [],
+            target_app.form_data,
+            verified_docs
+        )
+    elif service_reqs and service_reqs.get("jurisdiction_supported", True):
+        remaining_missing_fields = service_reqs.get("required_fields", [])
+
     return {
         "reply": reply_text,
-        "application_id": created_app_info.get("application_id") if created_app_info else None,
-        "service_code": target_service_code,
-        "status": created_app_info.get("current_status") if created_app_info else None,
+        "application_id": resolved_app_id,
+        "service_code": target_service_code or (target_app.service.code if target_app and target_app.service else None),
+        "status": created_app_info.get("current_status") if (created_app_info and "current_status" in created_app_info) else (target_app.status if target_app else None),
         "required_documents": service_reqs.get("required_documents", []) if (service_reqs and service_reqs.get("jurisdiction_supported", True)) else [],
-        "required_fields": service_reqs.get("required_fields", []) if (service_reqs and service_reqs.get("jurisdiction_supported", True)) else [],
+        "required_fields": remaining_missing_fields,
+        "missing_fields": remaining_missing_fields,
         "jurisdiction": jurisdiction_requested,
         "jurisdiction_notice": jurisdiction_notice,
     }
@@ -605,10 +675,16 @@ async def _run_fallback_tool_workflow(
             r"(?:annual\s+income|family\s+income|my\s+income|income)(?:\s+is|\s*:|\s*=\s*)?\s*(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d+)?|\d+\s*(?:lakhs?|lac|lacs?|crores?|k))\b",
             text_lower
         )
+        existing_income = (target_app.form_data or {}).get("annual_income") if target_app.form_data else None
+        is_bare_number = bool(re.fullmatch(r"(?:rs\.?|inr|₹)?\s*\d+(?:,\d+)*(?:\.\d+)?", text_lower))
+
         if inc_match:
             chat_fields_to_save["annual_income"] = inc_match.group(1).replace(",", "").strip()
-        elif target_app.service.code == "income_certificate" and re.fullmatch(r"(?:rs\.?|inr|₹)?\s*\d+(?:,\d+)*(?:\.\d+)?", text_lower):
-            chat_fields_to_save["annual_income"] = re.sub(r"[^\d.]", "", text_lower).strip()
+        elif target_app.service.code == "income_certificate" and is_bare_number:
+            if not existing_income:
+                chat_fields_to_save["annual_income"] = re.sub(r"[^\d.]", "", text_lower).strip()
+            else:
+                logger.info("Standalone number received but annual_income already satisfied; preserving existing value.")
 
         occ_match = re.search(
             r"\b(?:occupation|profession|my\s+job|work\s+as\s+a?|i\s+work\s+as\s+a?|i\s+am\s+a?|employed\s+as\s+a?)(?:\s+is|\s*:|\s*=\s*)?\s*([a-zA-Z\s]+?)(?:\.|$|,|\band\b)",
@@ -691,6 +767,47 @@ async def _run_fallback_tool_workflow(
                     "jurisdiction": jurisdiction_requested,
                     "jurisdiction_notice": None,
                 }
+        elif is_bare_number and existing_income and target_app.service.code == "income_certificate":
+            reqs = await get_rules_requirements(target_app.service.code, jurisdiction=jurisdiction_requested, db=db)
+            profile_data = await _execute_tool("get_citizen_profile", {"citizen_id": citizen_id}, citizen_id, db)
+            uploaded_docs = profile_data.get("uploaded_document_types", [])
+            merged_profile = profile_data.get("merged_profile", {})
+
+            missing_docs = [d for d in reqs["required_documents"] if not is_requirement_satisfied(d, uploaded_docs)]
+            missing_fields = compute_application_missing_fields(
+                reqs.get("required_fields", []),
+                target_app.form_data,
+                [merged_profile]
+            )
+
+            if missing_fields:
+                next_missing = missing_fields[0].replace('_', ' ').title()
+                reply = (
+                    f"Your **Annual Income** is already recorded (`{existing_income}`).\n\n"
+                    f"To complete your application, please provide your **{next_missing}**."
+                )
+            elif missing_docs:
+                docs_formatted = "\n".join([f"  • {d.replace('_', ' ').title()}" for d in missing_docs])
+                reply = (
+                    f"Your **Annual Income** is already recorded (`{existing_income}`). All required information fields are complete!\n\n"
+                    f"Please upload the remaining required documents:\n{docs_formatted}"
+                )
+            else:
+                reply = (
+                    f"Your **Annual Income** is already recorded (`{existing_income}`). All requirements are complete!\n\n"
+                    f"You can now say 'Please prepare my application' to proceed to submission."
+                )
+
+            return {
+                "reply": reply,
+                "application_id": str(target_app.id),
+                "service_code": target_app.service.code,
+                "status": target_app.status,
+                "required_documents": missing_docs,
+                "required_fields": missing_fields,
+                "jurisdiction": jurisdiction_requested,
+                "jurisdiction_notice": None,
+            }
 
     # 2. Check info request for an existing application (e.g., 'What documents are required for an Income Certificate?')
     is_general_info_query = any(k in text for k in [
